@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Hosts a VST3 plugin (e.g. APL Virtuoso) and turns three of its parameters (yaw, pitch, roll)
-// with head tracking from Bridgehead (OSC /ypr in degrees). Driving the plugin's own knobs
+// with head tracking from Bridgehead (profile "IEM Scene Rotator YPR"). Driving the plugin's own knobs
 // avoids the crackling some renderers produce on their OSC head tracking input.
 
 #include <juce_audio_utils/juce_audio_utils.h>
@@ -776,43 +776,26 @@ private:
         return false;
     }
 
-    // Accepts the Bridgehead profile "IEM Scene Rotator YPR" (separate /SceneRotator/yaw, /pitch,
-    // /roll messages; pitch and roll are sign-flipped by that profile) and a combined /ypr message
-    // with the tracker's raw yaw, pitch, roll. Internally everything uses the raw angles.
+    // Bridgehead profile "IEM Scene Rotator YPR": separate /SceneRotator/yaw, /pitch, /roll messages.
+    // That profile sign-flips pitch and roll; internally the tracker's raw angles are used.
     void oscMessageReceived (const OSCMessage& m) override
     {
         ++messagesReceived;
         const auto address = m.getAddressPattern().toString();
         lastAddress = address;
 
-        if (m.size() == 1)
-        {
-            float value = 0.0f;
-            if (! numberAt (m, 0, value))
-                return;
-            const auto lower = address.toLowerCase();
-            const bool iem = lower.startsWith ("/scenerotator/");
-            for (size_t i = 0; i < 3; ++i)
-            {
-                if (lower.endsWith (String ("/") + String (axisNames[i]).toLowerCase()))
-                {
-                    const float raw = (iem && i > 0) ? -value : value; // undo the IEM profile's -pitch, -roll
-                    noteAngles();
-                    applyAxis (i, raw);
-                }
-            }
+        float value = 0.0f;
+        if (m.size() != 1 || ! numberAt (m, 0, value))
             return;
-        }
 
-        if (m.size() == 3)
+        const auto lower = address.toLowerCase();
+        for (size_t i = 0; i < 3; ++i)
         {
-            std::array<float, 3> deg {};
-            for (int i = 0; i < 3; ++i)
-                if (! numberAt (m, i, deg[(size_t) i]))
-                    return;
-            noteAngles();
-            for (size_t i = 0; i < 3; ++i)
-                applyAxis (i, deg[i]);
+            if (lower == "/scenerotator/" + String (axisNames[i]).toLowerCase())
+            {
+                noteAngles();
+                applyAxis (i, i > 0 ? -value : value); // undo the profile's -pitch, -roll
+            }
         }
     }
 
