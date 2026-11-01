@@ -756,8 +756,15 @@ private:
             auto& a = params[i];
             if (a.param == nullptr)
                 continue;
-            const float d = invertButtons[i].getToggleState() ? -deg[i] : deg[i];
-            const float norm = jlimit (0.0f, 1.0f, (d - a.low) / (a.high - a.low));
+            float d = invertButtons[i].getToggleState() ? -deg[i] : deg[i];
+            const float span = a.high - a.low;
+            if (std::abs (span) >= 359.0f)
+            {
+                // Full-circle parameter (e.g. 0..360 degrees): wrap the angle into its range.
+                const float lo = jmin (a.low, a.high);
+                d = lo + std::fmod (std::fmod (d - lo, 360.0f) + 360.0f, 360.0f);
+            }
+            const float norm = jlimit (0.0f, 1.0f, (d - a.low) / span);
             if (std::abs (norm - a.param->getValue()) > 1.0e-6f)
                 a.param->setValueNotifyingHost (norm);
         }
