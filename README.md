@@ -44,8 +44,12 @@ installed together with Virtuoso).
    automatically (HT Yaw, HT Pitch, HT Roll).
 6. **In the plugin:** turn off its own head tracking input. Virtuoso: Head tracking → **Manual**.
 7. **Input:** the channel layout of your source – 7.1 by default.
-8. If an axis turns the wrong way, tick **Invert** for it. Pitch is inverted by default, which is
-   correct for Virtuoso with the Bridgehead profile IEM Scene Rotator YPR.
+8. If an axis turns the wrong way, tick **Invert** for it. By default nothing is inverted – the
+   normal orientation is the one used by IEM Scene Rotator and Virtuoso.
+
+**A/B comparison:** **Bypass (dry)** plays the input without the plugin. Stereo passes through
+unchanged; surround is downmixed to stereo (centre and surrounds at −3 dB, LFE left out, a bit
+quieter overall so it does not clip).
 
 Everything is saved and restored on the next start: audio devices, Bridgehead port, the last plugin
 and, per plugin, its own settings, the chosen parameters and the invert options.

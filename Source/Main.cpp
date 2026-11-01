@@ -21,7 +21,7 @@ constexpr int minWidth = 900;
 constexpr int barHeight = 190;
 const std::array<const char*, 3> axisNames { "Yaw", "Pitch", "Roll" };
 const std::array<float, 3> fallbackRange { 180.0f, 90.0f, 90.0f }; // +/- degrees if the plugin text can't be parsed
-const std::array<bool, 3> defaultInvert { false, true, false };     // tracker's raw angles -> Virtuoso
+const std::array<bool, 3> defaultInvert { false, false, false };
 
 const Colour green (0xff1f9d55);
 const Colour amber (0xffd4a017);
@@ -158,6 +158,15 @@ public:
     void setMuted (bool m) { muted = m; }
     static constexpr int maxChannels = 32;
     // Which device input channel feeds each plugin input channel (-1 = silent).
+    void setBypass (bool b) { bypass = b; }
+
+    // Stereo downmix gains per plugin input channel, used while bypassed (set while stopped).
+    void setDownmixGains (const std::vector<std::pair<float, float>>& gains)
+    {
+        for (int i = 0; i < maxChannels; ++i)
+            downmix[(size_t) i] = i < (int) gains.size() ? gains[(size_t) i] : std::pair<float, float> { 0.0f, 0.0f };
+    }
+
     void setInputSource (int pluginChannel, int deviceChannel)
     {
         if (isPositiveAndBelow (pluginChannel, maxChannels))
@@ -229,6 +238,15 @@ public:
                 block.clear (ch, 0, numSamples);
         }
 
+        if (bypass)
+        {
+            // Dry signal for A/B comparisons: the routed input, downmixed to stereo.
+            writeDownmix (block, jmin (channels, pluginIns), outputs, numOutputs, numSamples);
+            applySoftStart (outputs, numOutputs, numSamples);
+            checkRunaway (outputs, numOutputs, numSamples);
+            return;
+        }
+
         midi.clear();
         p->processBlock (block, midi);
 
@@ -255,6 +273,25 @@ public:
     }
 
 private:
+    void writeDownmix (const AudioBuffer<float>& in, int numIn, float* const* outputs, int numOutputs, int numSamples)
+    {
+        clearOutputs (outputs, numOutputs, numSamples);
+        for (int side = 0; side < jmin (2, numOutputs); ++side)
+        {
+            if (outputs[side] == nullptr)
+                continue;
+            for (int ch = 0; ch < numIn; ++ch)
+            {
+                const auto& g = downmix[(size_t) ch];
+                const float gain = side == 0 ? g.first : g.second;
+                if (std::abs (gain) > 0.0f)
+                    FloatVectorOperations::addWithMultiply (outputs[side], in.getReadPointer (ch), gain, numSamples);
+            }
+            for (int i = 0; i < numSamples; ++i)
+                outputs[side][i] = jlimit (-2.0f, 2.0f, outputs[side][i]);
+        }
+    }
+
     static void clearOutputs (float* const* outputs, int numOutputs, int numSamples)
     {
         for (int ch = 0; ch < numOutputs; ++ch)
@@ -299,7 +336,8 @@ private:
     }
 
     AudioPluginInstance* plugin = nullptr;
-    std::atomic<bool> muted { false }, tripped { false };
+    std::atomic<bool> muted { false }, tripped { false }, bypass { false };
+    std::array<std::pair<float, float>, maxChannels> downmix {};
     struct InputMap
     {
         InputMap() { for (int i = 0; i < maxChannels; ++i) channels[(size_t) i] = i; }
@@ -357,6 +395,23 @@ public:
             settings->setValue ("iemDefaults", true);
         }
         portEditor.setText (String (settings->getIntValue ("oscPort", defaultOscPort)));
+
+        // One-time: "Invert" now means inverted relative to the normal (IEM/Virtuoso) orientation.
+        // Older versions stored pitch relative to the tracker's raw angles, i.e. flipped.
+        if (! settings->getBoolValue ("pitchConvention2", false))
+        {
+            for (auto& key : settings->getAllProperties().getAllKeys())
+                if (key.endsWith (".invertPitch"))
+                    settings->setValue (key, ! settings->getBoolValue (key));
+            for (auto& key : settings->getAllProperties().getAllKeys())
+                if (key.endsWith (".paramPitch") || key.endsWith (".state"))
+                {
+                    const auto prefix = key.upToLastOccurrenceOf (".", false, false);
+                    if (! settings->containsKey (prefix + ".invertPitch"))
+                        settings->setValue (prefix + ".invertPitch", false); // old default (on) -> off
+                }
+            settings->setValue ("pitchConvention2", true);
+        }
         portEditor.onReturnKey = portEditor.onFocusLost = [this] { applyPort(); };
 
         addAndMakeVisible (layoutLabel);
@@ -367,6 +422,12 @@ public:
         layoutBox.setSelectedItemIndex (jlimit (0, layoutBox.getNumItems() - 1, settings->getIntValue ("layout", 0)),
                                         dontSendNotification);
         layoutBox.onChange = [this] { settings->setValue ("layout", layoutBox.getSelectedItemIndex()); applyLayout(); };
+
+        addAndMakeVisible (bypassButton);
+        bypassButton.setClickingTogglesState (true);
+        bypassButton.setColour (TextButton::buttonOnColourId, amber.darker (0.3f));
+        bypassButton.setTooltip ("Hear the input without the plugin (7.1 is downmixed to stereo) for A/B comparisons.");
+        bypassButton.onClick = [this] { engine.setBypass (bypassButton.getToggleState()); };
 
         addAndMakeVisible (channelsButton);
         channelsButton.onClick = [this] { showChannelRouting(); };
@@ -482,6 +543,8 @@ public:
 
         bar.removeFromTop (8);
         auto row4 = bar.removeFromTop (26);
+        bypassButton.setBounds (row4.removeFromLeft (110));
+        row4.removeFromLeft (10);
         channelsButton.setBounds (row4.removeFromLeft (110));
         row4.removeFromLeft (10);
         routingLabel.setBounds (row4);
@@ -659,10 +722,37 @@ private:
             if (plugin->setBusesLayout (l))
             {
                 activeLayout = layouts[(size_t) i].name;
+                updateDownmix();
                 return;
             }
         }
         activeLayout = "plugin default (" + String (plugin->getTotalNumInputChannels()) + " in)";
+        updateDownmix();
+    }
+
+    // Common stereo downmix: front L/R at 0 dB, centre and all other channels at -3 dB to their
+    // side, LFE left out; scaled down so typical material does not clip.
+    void updateDownmix()
+    {
+        std::vector<std::pair<float, float>> gains;
+        const auto names = pluginChannelNames();
+        const float m3 = 0.7071f, scale = names.size() > 2 ? 0.5f : 1.0f;
+        for (auto& n : names)
+        {
+            std::pair<float, float> g { 0.0f, 0.0f };
+            if (n.equalsIgnoreCase ("Lfe") || n.startsWithIgnoreCase ("Lfe"))
+                g = { 0.0f, 0.0f };
+            else if (n == "L")                g = { 1.0f, 0.0f };
+            else if (n == "R")                g = { 0.0f, 1.0f };
+            else if (n.startsWith ("C"))      g = { m3, m3 };
+            else if (n.containsIgnoreCase ("l")) g = { m3, 0.0f };
+            else if (n.containsIgnoreCase ("r")) g = { 0.0f, m3 };
+            else                              g = { m3, m3 };
+            gains.push_back ({ g.first * scale, g.second * scale });
+        }
+        if (gains.empty())
+            gains = { { 1.0f, 0.0f }, { 0.0f, 1.0f } };
+        engine.setDownmixGains (gains);
     }
 
     void applyLayout()
@@ -811,7 +901,9 @@ private:
             if (lower == "/scenerotator/" + String (axisNames[i]).toLowerCase())
             {
                 noteAngles();
-                applyAxis (i, i > 0 ? -value : value); // undo the profile's -pitch, -roll
+                // Normal orientation = IEM Scene Rotator / Virtuoso convention. The IEM profile's
+                // roll is flipped relative to that convention, pitch already matches.
+                applyAxis (i, i == 2 ? -value : value);
             }
         }
     }
@@ -874,6 +966,11 @@ private:
         else if (deviceManager.getCurrentAudioDevice() == nullptr)
         {
             c = red; status = "No audio device"; detail = "Click \"Audio settings...\" and choose your input and output.";
+        }
+        else if (bypassButton.getToggleState())
+        {
+            c = amber; status = "Bypassed - you hear the dry input";
+            detail = "Click \"Bypass (dry)\" again to hear the plugin.";
         }
         else if (engine.wasTripped())
         {
@@ -1114,7 +1211,7 @@ private:
     Label statusLabel, detailLabel;
     Label pluginLabel { {}, "Plugin" }, portLabel { {}, "Bridgehead port" }, layoutLabel { {}, "Input" };
     ComboBox pluginBox, layoutBox;
-    TextButton channelsButton { "Channels..." };
+    TextButton channelsButton { "Channels..." }, bypassButton { "Bypass (dry)" };
     Label routingLabel;
     std::vector<int> inputMap; // device input channel for each plugin input channel, -1 = off
     TextButton browseButton { "Browse..." }, audioButton { "Audio settings..." };
