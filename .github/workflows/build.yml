@@ -25,11 +25,11 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: HeadTrackingSmoother-Windows
+            artifact: HeadTrackingBridge-Windows
           - os: macos-latest
-            artifact: HeadTrackingSmoother-macOS-AppleSilicon
+            artifact: HeadTrackingBridge-macOS-AppleSilicon
           - os: macos-15-intel
-            artifact: HeadTrackingSmoother-macOS-Intel
+            artifact: HeadTrackingBridge-macOS-Intel
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -42,18 +42,18 @@ jobs:
       - name: Build Windows EXE
         if: runner.os == 'Windows'
         run: |
-          pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --hidden-import rtmidi --name "Head Tracking Smoother" --icon icon.ico app.py
+          pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --hidden-import rtmidi --name "Head Tracking Bridge" --icon icon.ico app.py
           mkdir out
-          copy "dist\Head Tracking Smoother.exe" "out\HeadTrackingSmoother.exe"
+          copy "dist\Head Tracking Bridge.exe" "out\HeadTrackingBridge.exe"
         shell: cmd
 
       - name: Build macOS app
         if: runner.os == 'macOS'
         run: |
-          pyinstaller --noconfirm --windowed --collect-all customtkinter --hidden-import rtmidi --name "Head Tracking Smoother" --icon icon.icns \
-            --osx-bundle-identifier io.github.lumen-tools.head-tracking-smoother app.py
+          pyinstaller --noconfirm --windowed --collect-all customtkinter --hidden-import rtmidi --name "Head Tracking Bridge" --icon icon.icns \
+            --osx-bundle-identifier io.github.lumen-tools.head-tracking-bridge app.py
           mkdir out
-          ditto -c -k --keepParent "dist/Head Tracking Smoother.app" "out/${{ matrix.artifact }}.zip"
+          ditto -c -k --keepParent "dist/Head Tracking Bridge.app" "out/${{ matrix.artifact }}.zip"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -83,5 +83,5 @@ jobs:
             exit 0
           fi
           gh release create "$TAG" artifacts/*/* --target "${GITHUB_SHA}" \
-            --repo "${GITHUB_REPOSITORY}" --title "Head Tracking Smoother $TAG" \
-            --notes "Windows: download HeadTrackingSmoother.exe and run it. Mac: download the matching ZIP, unzip it and open Head Tracking Smoother.app (see README)."
+            --repo "${GITHUB_REPOSITORY}" --title "Head Tracking Bridge $TAG" \
+            --notes "Windows: download HeadTrackingBridge.exe and run it. Mac: download the matching ZIP, unzip it and open Head Tracking Bridge.app (see README)."

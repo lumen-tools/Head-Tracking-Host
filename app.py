@@ -1,4 +1,4 @@
-"""Head Tracking Smoother - turns APL Virtuoso's Yaw/Pitch/Roll knobs with Bridgehead head tracking,
+"""Head Tracking Bridge - turns APL Virtuoso's Yaw/Pitch/Roll knobs with Bridgehead head tracking,
 via MIDI and Gig Performer (Windows & macOS)."""
 from __future__ import annotations
 
@@ -14,12 +14,12 @@ import customtkinter as ctk
 
 from tracker_core import DEFAULT_RANGES, Engine
 
-APP_NAME = "Head Tracking Smoother"
+APP_NAME = "Head Tracking Bridge"
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
 DEFAULTS = {"in_port": 8000, "midi_port": "", "invert_yaw": False, "invert_pitch": False, "invert_roll": False}
 AXES = ("yaw", "pitch", "roll")
-MAC_VIRTUAL_PORT = "Head Tracking Smoother (virtual port)"
+MAC_VIRTUAL_PORT = "Head Tracking Bridge (virtual port)"
 PORT_APPLY_DELAY_MS = 700
 BUSY_RETRY_SECONDS = 2.0
 
@@ -106,7 +106,7 @@ class MidiOut:
         self.close()
         try:
             if name == MAC_VIRTUAL_PORT:
-                self._out.open_virtual_port("Head Tracking Smoother")
+                self._out.open_virtual_port("Head Tracking Bridge")
             else:
                 self._out.open_port(list(self._out.get_ports()).index(name))
         except Exception as exc:
@@ -163,7 +163,7 @@ class App(ctk.CTk):
         try:
             if IS_WIN:
                 # CustomTkinter sets its own icon shortly after start; override it afterwards.
-                ico = Path(tempfile.gettempdir()) / "head_tracking_smoother.ico"
+                ico = Path(tempfile.gettempdir()) / "head_tracking_bridge.ico"
                 make_icon_image(256).save(ico, sizes=[(16, 16), (32, 32), (48, 48), (256, 256)])
                 self.after(300, lambda: self.iconbitmap(str(ico)))
             else:
@@ -407,7 +407,7 @@ class App(ctk.CTk):
 
             if self.tray_icon is None:
                 self.tray_icon = pystray.Icon(
-                    "head_tracking_smoother",
+                    "head_tracking_bridge",
                     make_icon_image(64),
                     APP_NAME,
                     pystray.Menu(
