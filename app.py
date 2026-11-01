@@ -22,7 +22,7 @@ IS_WIN = sys.platform == "win32"
 DEFAULTS = {"in_port": 8000, "midi_port": "", "invert_yaw": False, "invert_pitch": False, "invert_roll": False}
 AXES = ("yaw", "pitch", "roll")
 MAC_VIRTUAL_PORT = "Head Tracking Bridge (virtual port)"
-SETUP_GUIDE_URL = "https://github.com/lumen-tools/Head-Tracking-Smoother#setup"
+SETUP_GUIDE_URL = "https://github.com/lumen-tools/Head-Tracking-Bridge#setup"
 # Never offer these: the Supperware tracker's own port and the built-in Windows synth.
 HIDDEN_PORT_WORDS = ("head tracker", "wavetable")
 VIRTUAL_PORT_WORDS = ("loopmidi", "iac", "virtual", "head tracking bridge")
