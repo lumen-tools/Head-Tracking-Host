@@ -23,7 +23,7 @@ From **Releases** (right-hand side of the GitHub page):
 | Windows 10/11 | `HeadTrackingHost.exe` |
 | Mac (Apple Silicon and Intel) | `HeadTrackingHost-macOS.zip` |
 
-Portable – no installation needed. Requires the renderer as a **VST3 plugin** (for Virtuoso it is
+Portable – no installation needed, settings are stored next to the program. Requires the renderer as a **VST3 plugin** (for Virtuoso it is
 installed together with Virtuoso).
 
 ## Setup
@@ -79,8 +79,12 @@ The app is not commercially code-signed, so the system warns once:
 - **Yellow "no yaw/pitch/roll":** Bridgehead uses another profile → choose **IEM Scene Rotator YPR**.
 - **No sound:** check the channels in **Audio settings...** and, on the Mac, microphone access in
   *System Settings → Privacy & Security → Microphone*.
-- Settings are stored in `%APPDATA%\Head Tracking Host` (Windows) or
-  `~/Library/Application Support/Head Tracking Host` (Mac).
+- **Settings are portable:** they are stored in `Head Tracking Host.settings` **next to the program**
+  (next to the EXE on Windows, next to the app on the Mac) – copy the folder and all settings come
+  along. If that folder is not writable, the user folder is used instead: `%APPDATA%\Head Tracking Host`
+  (Windows) or `~/Library/Application Support/Head Tracking Host` (Mac). On the Mac, move the app
+  out of *Downloads* once (e.g. into its own folder) – macOS runs unsigned apps started from
+  Downloads from a hidden read-only location.
 
 ## Building from source
 

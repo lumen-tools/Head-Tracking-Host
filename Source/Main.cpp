@@ -43,6 +43,10 @@ std::vector<InputLayout> inputLayouts()
              { "Stereo (2 channels)", AudioChannelSet::stereo() } };
 }
 
+// Portable: the settings file lives next to the program (EXE on Windows, .app on the Mac), so
+// copying the folder takes all settings along. Falls back to the user folder if that place is
+// not writable (e.g. a protected folder, or macOS running an unsigned app from a hidden
+// read-only "AppTranslocation" location until it has been moved once).
 std::unique_ptr<PropertiesFile> openSettings()
 {
     PropertiesFile::Options o;
@@ -50,6 +54,19 @@ std::unique_ptr<PropertiesFile> openSettings()
     o.folderName          = "Head Tracking Host";
     o.filenameSuffix      = ".settings";
     o.osxLibrarySubFolder = "Application Support";
+
+    const auto userFile = o.getDefaultFile();
+    const auto app = File::getSpecialLocation (File::currentApplicationFile);
+    const auto folder = app.getParentDirectory();
+    const auto portableFile = folder.getChildFile ("Head Tracking Host.settings");
+
+    const bool translocated = app.getFullPathName().contains ("/AppTranslocation/");
+    if (! translocated && folder.hasWriteAccess())
+    {
+        if (! portableFile.existsAsFile() && userFile.existsAsFile())
+            userFile.copyFileTo (portableFile); // take over existing settings once
+        return std::make_unique<PropertiesFile> (portableFile, o);
+    }
     return std::make_unique<PropertiesFile> (o);
 }
 
