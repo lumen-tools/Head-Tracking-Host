@@ -1,10 +1,13 @@
 """Head Tracking Smoother - smooths Bridgehead head tracking for APL Virtuoso (Windows & macOS)."""
 from __future__ import annotations
 
+import csv
 import json
 import os
+import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from tkinter import messagebox
 
@@ -20,6 +23,7 @@ SLIDER_MIN, SLIDER_MAX = 5, 150
 RECOMMENDED_MIN, RECOMMENDED_MAX = 20, 60
 PORT_APPLY_DELAY_MS = 700
 BUSY_RETRY_SECONDS = 2.0
+RECORD_SECONDS = 20
 
 MUTED = ("gray38", "gray62")
 GREEN, AMBER, RED, GREY = "#1f9d55", "#d4a017", "#d64545", "#8a8a8a"
@@ -69,6 +73,23 @@ def make_icon_image(size: int = 64):
     pts = [(12 * s, 36 * s), (22 * s, 24 * s), (32 * s, 36 * s), (42 * s, 48 * s), (52 * s, 30 * s)]
     d.line(pts, fill=(255, 255, 255, 255), width=max(2, int(5 * s)), joint="curve")
     return img
+
+
+def recordings_dir() -> Path:
+    documents = Path.home() / "Documents"
+    return (documents if documents.is_dir() else Path.home()) / f"{APP_NAME} recordings"
+
+
+def reveal_file(path: Path) -> None:
+    try:
+        if IS_WIN:
+            subprocess.Popen(["explorer", "/select,", str(path)])
+        elif IS_MAC:
+            subprocess.Popen(["open", "-R", str(path)])
+        else:
+            subprocess.Popen(["xdg-open", str(path.parent)])
+    except OSError:
+        pass
 
 
 def parse_port(text: str) -> int | None:
@@ -150,7 +171,19 @@ class App(ctk.CTk):
         self.detail_text = ctk.CTkLabel(
             status, text="", text_color=MUTED, font=ctk.CTkFont(size=12), anchor="w", justify="left", wraplength=380
         )
-        self.detail_text.pack(fill="x", padx=18, pady=(2, 14))
+        self.detail_text.pack(fill="x", padx=18, pady=(2, 8))
+        record_row = ctk.CTkFrame(status, fg_color="transparent")
+        record_row.pack(fill="x", padx=18, pady=(0, 14))
+        self.record_button = ctk.CTkButton(
+            record_row, text=f"Record {RECORD_SECONDS} s", width=110, command=self._start_recording,
+            fg_color="transparent", border_width=1, text_color=("gray10", "gray90"),
+            border_color=("gray60", "gray40"), hover_color=("gray85", "gray25"),
+        )
+        self.record_button.pack(side="left")
+        self.record_text = ctk.CTkLabel(
+            record_row, text="Saves the incoming data for analysis", text_color=MUTED, font=ctk.CTkFont(size=12)
+        )
+        self.record_text.pack(side="left", padx=(10, 0))
 
         # Ports
         ports = self._card("Ports")
@@ -298,6 +331,43 @@ class App(ctk.CTk):
         self.engine.bypass = bool(self.bypass_switch.get())
         self.settings["bypass"] = self.engine.bypass
         save_settings(self.settings)
+
+    # ---------- Recording ----------
+    def _start_recording(self):
+        if self.engine.recording:
+            return
+        self.engine.start_recording(RECORD_SECONDS)
+        self.record_button.configure(state="disabled")
+        self._recording_tick()
+
+    def _recording_tick(self):
+        if self.engine.recording:
+            remaining = int(self.engine.recording_remaining()) + 1
+            self.record_text.configure(text=f"Recording… {remaining} s – move your head", text_color=RED)
+            self.after(200, self._recording_tick)
+            return
+        rows = self.engine.take_recording()
+        self.record_button.configure(state="normal")
+        self.record_text.configure(text="Saves the incoming data for analysis", text_color=MUTED)
+        if not rows:
+            messagebox.showwarning(
+                APP_NAME, f"Nothing was received on port {self.settings['in_port']} during the recording.", parent=self
+            )
+            return
+        path = recordings_dir() / time.strftime(f"recording-port{self.settings['in_port']}-%Y%m%d-%H%M%S.csv")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("w", newline="", encoding="utf-8") as f:
+                f.write(f"# {APP_NAME} recording, input port {self.settings['in_port']}, platform {sys.platform}\n")
+                writer = csv.writer(f)
+                writer.writerow(["time_s", "address", "types", "values"])
+                for t, address, tags, args in rows:
+                    writer.writerow([f"{t:.6f}", address, tags, " ".join(repr(a) for a in args)])
+        except OSError as exc:
+            messagebox.showerror(APP_NAME, f"Could not save the recording:\n{exc}", parent=self)
+            return
+        messagebox.showinfo(APP_NAME, f"{len(rows)} messages saved to:\n{path}", parent=self)
+        reveal_file(path)
 
     # ---------- Reset ----------
     def _reset(self):

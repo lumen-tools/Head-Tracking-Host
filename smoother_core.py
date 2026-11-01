@@ -58,6 +58,32 @@ def parse_numbers(data: bytes) -> tuple[str, list[float]] | None:
         return None
 
 
+def describe_message(data: bytes) -> tuple[str, str, list]:
+    """Address, type tags and decoded arguments of any OSC message (for recordings)."""
+    try:
+        address, pos = _read_string(data, 0)
+        tags, pos = _read_string(data, pos)
+        args: list = []
+        for tag in tags[1:]:
+            if tag in "fi":
+                args.append(struct.unpack_from(">f" if tag == "f" else ">i", data, pos)[0])
+                pos += 4
+            elif tag in "dh":
+                args.append(struct.unpack_from(">d" if tag == "d" else ">q", data, pos)[0])
+                pos += 8
+            elif tag == "s":
+                text, pos = _read_string(data, pos)
+                args.append(text)
+            elif tag in "TFN":
+                args.append({"T": True, "F": False, "N": None}[tag])
+            else:
+                args.append(f"<{tag}>")
+                break
+        return address, tags, args
+    except (ValueError, struct.error, IndexError):
+        return "<unparsed>", "", [data.hex()]
+
+
 def build_message(address: str, values: list[float]) -> bytes:
     return _osc_string(address) + _osc_string("," + "f" * len(values)) + struct.pack(
         ">" + "f" * len(values), *values
@@ -115,6 +141,9 @@ class Engine:
         self._tx: socket.socket | None = None
         self._running = False
         self._threads: list[threading.Thread] = []
+        self._record_until = 0.0
+        self._record_start = 0.0
+        self._recorded: list[tuple[float, str, str, list]] = []
 
     # --- Control ---
     def start(self, in_port: int, out_port: int, out_host: str = "127.0.0.1") -> None:
@@ -151,6 +180,25 @@ class Engine:
                 sock.close()
         self._rx = self._tx = None
 
+    # --- Recording (diagnostics) ---
+    def start_recording(self, seconds: float) -> None:
+        with self._lock:
+            self._recorded = []
+            self._record_start = time.monotonic()
+            self._record_until = self._record_start + seconds
+
+    @property
+    def recording(self) -> bool:
+        return time.monotonic() < self._record_until
+
+    def recording_remaining(self) -> float:
+        return max(0.0, self._record_until - time.monotonic())
+
+    def take_recording(self) -> list[tuple[float, str, str, list]]:
+        with self._lock:
+            rows, self._recorded = self._recorded, []
+        return rows
+
     @property
     def running(self) -> bool:
         return self._running
@@ -181,7 +229,13 @@ class Engine:
                 if not self._running:
                     break
                 continue
-            for msg in split_packet(data):
+            messages = split_packet(data)
+            now = time.monotonic()
+            if now < self._record_until:
+                with self._lock:
+                    for msg in messages:
+                        self._recorded.append((now - self._record_start, *describe_message(msg)))
+            for msg in messages:
                 parsed = parse_numbers(msg)
                 if parsed is None or self.bypass:
                     self._send(msg)
