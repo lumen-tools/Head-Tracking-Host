@@ -80,4 +80,4 @@ jobs:
           fi
           gh release create "$TAG" artifacts/*/* --target "${GITHUB_SHA}" \
             --repo "${GITHUB_REPOSITORY}" --title "HeadSmooth $TAG" \
-            --notes "Windows: HeadSmooth.exe herunterladen und starten. Mac: passende ZIP herunterladen, entpacken, HeadSmooth.app starten (siehe README)."
+            --notes "Windows: download HeadSmooth.exe and run it. Mac: download the matching ZIP, unzip it and open HeadSmooth.app (see README)."

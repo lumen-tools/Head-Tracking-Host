@@ -1,64 +1,64 @@
 # HeadSmooth
 
-Glättet das Head-Tracking des **Supperware Head Trackers** (über Bridgehead),
-bevor es bei **APL Virtuoso** ankommt. Gegen Knistern bei Kopfbewegungen.
+Smooths the head tracking of the **Supperware Head Tracker** (via Bridgehead)
+before it reaches **APL Virtuoso** – against crackling during head movements.
 
 ```
-Supperware → Bridgehead → HeadSmooth (Glättung, 200 Hz) → APL Virtuoso
+Supperware → Bridgehead → HeadSmooth (smoothing, 200 Hz) → APL Virtuoso
 ```
 
-Inoffizielles Hilfsprogramm, nicht verbunden mit Supperware oder APL.
+Unofficial helper tool, not affiliated with Supperware or APL.
 
 ## Download
 
-Unter **Releases** (rechts auf der GitHub-Seite):
+From **Releases** (right-hand side of the GitHub page):
 
-| System | Datei |
+| System | File |
 |---|---|
 | Windows 10/11 | `HeadSmooth.exe` |
-| Mac mit M1/M2/M3/M4 | `HeadSmooth-macOS-AppleSilicon.zip` |
-| Mac mit Intel-Prozessor | `HeadSmooth-macOS-Intel.zip` |
+| Mac with Apple Silicon (M1/M2/M3/M4) | `HeadSmooth-macOS-AppleSilicon.zip` |
+| Mac with Intel processor | `HeadSmooth-macOS-Intel.zip` |
 
-Alle Programme sind portabel, eine Installation ist nicht nötig.
+All builds are portable – no installation needed.
 
-## Einrichten
+## Setup
 
-1. **Bridgehead:** Profil *APL Virtuoso* lassen, nichts ändern (sendet an Port 8000).
-2. **Virtuoso:** Head tracking → *OSC* → Zahnrad → Profil *APL*, **Port auf 8001** stellen.
-3. **HeadSmooth** starten. Der Punkt wird grün und zeigt „Daten kommen an“.
+1. **Bridgehead:** keep the *APL Virtuoso* profile, change nothing (it sends to port 8000).
+2. **Virtuoso:** Head tracking → *OSC* → gear icon → profile *APL*, set **port to 8001**.
+3. Start **HeadSmooth**. The dot turns green and shows "Receiving".
 
-Die Ports lassen sich in HeadSmooth ändern („Übernehmen“). Einstellungen werden gespeichert.
+Ports can be changed in HeadSmooth ("Apply"). Settings are saved.
 
-### Glättung einstellen
+### Adjusting the smoothing
 
-- Regler nach links: direkter, nach rechts: weicher. Start: 40 ms.
-- „Glättung umgehen“ schickt die Daten ungeglättet weiter, zum direkten A/B-Vergleich.
+- Slider to the left: more direct; to the right: smoother. Default: 40 ms.
+- "Bypass smoothing" forwards the data unsmoothed, for a direct A/B comparison.
 
-### Hintergrund
+### Running in the background
 
-- **Windows:** Fenster schließen oder „In den Tray“ – läuft im Infobereich weiter.
-  Rechtsklick auf das Symbol → Öffnen / Beenden.
-- **Mac:** Fenster schließen – läuft weiter, Klick auf das Dock-Symbol holt es zurück.
-  Beenden mit Cmd+Q.
+- **Windows:** close the window or click "Minimize to tray" – it keeps running in the
+  notification area. Right-click the icon → Open / Quit.
+- **Mac:** close the window – it keeps running; click the Dock icon to bring it back.
+  Quit with Cmd+Q.
 
-## Erster Start: Sicherheitswarnungen
+## First launch: security warnings
 
-Das Programm ist nicht kostenpflichtig signiert, daher warnen die Systeme einmalig:
+The app is not commercially code-signed, so the system warns once:
 
-- **Windows (SmartScreen):** „Weitere Informationen“ → „Trotzdem ausführen“.
-- **Mac:** Beim ersten Öffnen erscheint eine Warnung. Dann
-  *Systemeinstellungen → Datenschutz & Sicherheit* → unten **„Trotzdem öffnen“**.
+- **Windows (SmartScreen):** "More info" → "Run anyway".
+- **Mac:** a warning appears on first launch. Then go to
+  *System Settings → Privacy & Security* and click **"Open Anyway"** at the bottom.
 
-## Fehlersuche
+## Troubleshooting
 
-- **„Port 8000 ist belegt“:** Virtuoso hört noch auf 8000 → in Virtuoso auf 8001 stellen,
-  dann in HeadSmooth „Übernehmen“. Oder HeadSmooth läuft schon ein zweites Mal.
-- **Gelb „warte auf Bridgehead“:** Bridgehead läuft nicht, Tracker nicht verbunden,
-  oder Bridgehead sendet an einen anderen Port als „Eingang“.
-- Abstürze werden protokolliert in `%APPDATA%\HeadSmooth\crash.log` (Windows) bzw.
+- **"Port 8000 is already in use":** Virtuoso is still listening on 8000 → set Virtuoso to 8001,
+  then click "Apply" in HeadSmooth. Or HeadSmooth is already running.
+- **Yellow "waiting for Bridgehead":** Bridgehead is not running, the tracker is not connected,
+  or Bridgehead sends to a port other than "Input".
+- Crashes are logged to `%APPDATA%\HeadSmooth\crash.log` (Windows) or
   `~/Library/Application Support/HeadSmooth/crash.log` (Mac).
 
-## Selbst bauen
+## Building from source
 
 ```
 pip install -r requirements.txt

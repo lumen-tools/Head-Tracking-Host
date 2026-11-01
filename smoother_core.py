@@ -1,8 +1,8 @@
-"""Glaettungs-Engine: empfaengt OSC-Head-Tracking, glaettet es und sendet es weiter.
+"""Smoothing engine: receives OSC head tracking, smooths it and forwards it.
 
-- Nachrichten mit 4 Zahlen        -> als Quaternion geglaettet (z. B. /Virtuoso/quat)
-- Nachrichten mit 1 oder 3 Zahlen -> als Winkel in Grad geglaettet
-- alles andere                    -> unveraendert weitergereicht
+- messages with 4 numbers      -> smoothed as a quaternion (e.g. /Virtuoso/quat)
+- messages with 1 or 3 numbers -> smoothed as angles in degrees
+- everything else              -> forwarded unchanged
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def _osc_string(text: str) -> bytes:
 
 
 def split_packet(data: bytes) -> list[bytes]:
-    """Zerlegt OSC-Bundles in einzelne Nachrichten."""
+    """Split OSC bundles into individual messages."""
     if not data.startswith(b"#bundle\0"):
         return [data]
     messages, pos = [], 16
@@ -39,7 +39,7 @@ def split_packet(data: bytes) -> list[bytes]:
 
 
 def parse_numbers(data: bytes) -> tuple[str, list[float]] | None:
-    """Adresse und Werte, wenn die Nachricht nur aus 1, 3 oder 4 Fliesskommazahlen besteht."""
+    """Address and values if the message consists only of 1, 3 or 4 floats."""
     try:
         address, pos = _read_string(data, 0)
         tags, pos = _read_string(data, pos)
@@ -64,22 +64,22 @@ def build_message(address: str, values: list[float]) -> bytes:
     )
 
 
-# ---------- Glaettung ----------
+# ---------- Smoothing ----------
 def _normalize(q: list[float]) -> list[float]:
     n = math.sqrt(sum(v * v for v in q)) or 1.0
     return [v / n for v in q]
 
 
 def step_quat(current: list[float], target: list[float], t: float) -> list[float]:
-    """Komponentenweise mit Vorzeichenabgleich + Normierung (nlerp).
-    Unabhaengig davon, in welcher Reihenfolge w, x, y, z gesendet werden."""
+    """Component-wise with sign alignment + normalisation (nlerp).
+    Works regardless of the order in which w, x, y, z are sent."""
     if sum(a * b for a, b in zip(current, target)) < 0:
         target = [-v for v in target]
     return _normalize([a + (b - a) * t for a, b in zip(current, target)])
 
 
 def step_angles(current: list[float], target: list[float], t: float) -> list[float]:
-    """Kuerzester Weg, damit 179 -> -179 nicht einmal herum dreht."""
+    """Shortest path, so 179 -> -179 does not spin all the way round."""
     out = []
     for a, b in zip(current, target):
         diff = (b - a + 180.0) % 360.0 - 180.0
@@ -97,9 +97,9 @@ class Channel:
 
 
 class Engine:
-    """Laeuft in eigenen Threads. Alle Einstellungen koennen live geaendert werden."""
+    """Runs in its own threads. All settings can be changed live."""
 
-    INPUT_TIMEOUT = 1.0  # s ohne Eingang -> nichts mehr senden
+    INPUT_TIMEOUT = 1.0  # seconds without input -> stop sending
 
     def __init__(self):
         self.smooth_ms = 40.0
@@ -116,9 +116,9 @@ class Engine:
         self._running = False
         self._threads: list[threading.Thread] = []
 
-    # --- Steuerung ---
+    # --- Control ---
     def start(self, in_port: int, out_port: int, out_host: str = "127.0.0.1") -> None:
-        """Wirft OSError, wenn der Eingangsport belegt ist."""
+        """Raises OSError if the input port is in use."""
         self.stop()
         rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
@@ -167,7 +167,7 @@ class Engine:
         try:
             tx.sendto(data, self.dest)
         except OSError:
-            pass  # Ziel nicht erreichbar (z. B. Virtuoso noch nicht offen) -> ignorieren
+            pass  # destination unreachable (e.g. Virtuoso not open yet) -> ignore
 
     def _receive_loop(self) -> None:
         rx = self._rx
@@ -177,7 +177,7 @@ class Engine:
             except socket.timeout:
                 continue
             except OSError:
-                # Windows meldet bei UDP manchmal "Verbindung zurueckgesetzt" -> weiter
+                # Windows sometimes reports "connection reset" on UDP -> continue
                 if not self._running:
                     break
                 continue
