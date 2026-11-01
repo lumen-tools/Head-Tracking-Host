@@ -9,58 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: python -m unittest discover -s tests -v
-
   build:
-    needs: test
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            artifact: HeadTrackingBridge-Windows
-          - os: macos-latest
-            artifact: HeadTrackingBridge-macOS-AppleSilicon
-          - os: macos-15-intel
-            artifact: HeadTrackingBridge-macOS-Intel
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install -r requirements.txt
-      - run: python make_icons.py
-
-      - name: Build Windows EXE
-        if: runner.os == 'Windows'
-        run: |
-          pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --hidden-import rtmidi --name "Head Tracking Bridge" --icon icon.ico app.py
-          mkdir out
-          copy "dist\Head Tracking Bridge.exe" "out\HeadTrackingBridge.exe"
-        shell: cmd
-
-      - name: Build macOS app
-        if: runner.os == 'macOS'
-        run: |
-          pyinstaller --noconfirm --windowed --collect-all customtkinter --hidden-import rtmidi --name "Head Tracking Bridge" --icon icon.icns \
-            --osx-bundle-identifier io.github.lumen-tools.head-tracking-bridge app.py
-          mkdir out
-          ditto -c -k --keepParent "dist/Head Tracking Bridge.app" "out/${{ matrix.artifact }}.zip"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: out/*
-
-  build-host:
     strategy:
       fail-fast: false
       matrix:
@@ -73,24 +22,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Windows EXE
+      - name: Build Windows EXE (portable, static runtime)
         if: runner.os == 'Windows'
-        working-directory: host
         run: |
           cmake -S . -B build -A x64
           cmake --build build --config Release --parallel
-          mkdir ..\out
-          copy "build\HeadTrackingHost_artefacts\Release\Head Tracking Host.exe" "..\out\HeadTrackingHost.exe"
+          mkdir out
+          copy "build\HeadTrackingHost_artefacts\Release\Head Tracking Host.exe" "out\HeadTrackingHost.exe"
         shell: cmd
 
       - name: Build macOS app (Apple Silicon + Intel)
         if: runner.os == 'macOS'
-        working-directory: host
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release --parallel 4
-          mkdir -p ../out
-          ditto -c -k --keepParent "build/HeadTrackingHost_artefacts/Release/Head Tracking Host.app" "../out/${{ matrix.artifact }}.zip"
+          mkdir -p out
+          ditto -c -k --keepParent "build/HeadTrackingHost_artefacts/Release/Head Tracking Host.app" "out/${{ matrix.artifact }}.zip"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -99,14 +46,14 @@ jobs:
 
   release:
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
-    needs: [build, build-host]
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Create release
+      - name: Create or update release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -117,7 +64,7 @@ jobs:
             gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/$TAG" \
               -f sha="${GITHUB_SHA}" -F force=true >/dev/null
             gh release upload "$TAG" artifacts/*/* --clobber --repo "${GITHUB_REPOSITORY}"
-            # Remove files from older builds that this build no longer produces (e.g. after a rename).
+            # Remove files from older builds that this build no longer produces.
             CURRENT=$(for f in artifacts/*/*; do basename "$f"; done)
             RELEASE_ID=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$TAG" --jq .id)
             gh api "repos/${GITHUB_REPOSITORY}/releases/$RELEASE_ID/assets" --jq '.[] | "\(.id) \(.name)"' |
@@ -130,5 +77,5 @@ jobs:
             exit 0
           fi
           gh release create "$TAG" artifacts/*/* --target "${GITHUB_SHA}" \
-            --repo "${GITHUB_REPOSITORY}" --title "Head Tracking Bridge $TAG" \
-            --notes "Windows: download HeadTrackingBridge.exe and run it. Mac: download the matching ZIP, unzip it and open Head Tracking Bridge.app (see README)."
+            --repo "${GITHUB_REPOSITORY}" --title "Version $(cat VERSION)" \
+            --notes "Windows: download HeadTrackingHost.exe and run it. Mac: download HeadTrackingHost-macOS.zip, unzip it and open Head Tracking Host.app (see README)."

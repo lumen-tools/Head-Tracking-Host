@@ -1,8 +1,2 @@
-__pycache__/
 build/
-dist/
-out/
-*.spec
-icon.ico
-icon.icns
-host/build/
+.DS_Store

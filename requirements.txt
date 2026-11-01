@@ -1,5 +1,0 @@
-customtkinter==5.2.2
-pillow==11.3.0
-python-rtmidi==1.5.8
-pystray==0.19.5; sys_platform == "win32"
-pyinstaller==6.16.0
