@@ -1,10 +1,10 @@
-# HeadSmooth
+# Head Tracking Smoother
 
 Smooths the head tracking of the **Supperware Head Tracker** (via Bridgehead)
 before it reaches **APL Virtuoso** – against crackling during head movements.
 
 ```
-Supperware → Bridgehead → HeadSmooth (smoothing, 200 Hz) → APL Virtuoso
+Supperware → Bridgehead → Head Tracking Smoother (smoothing, 200 Hz) → APL Virtuoso
 ```
 
 Unofficial helper tool, not affiliated with Supperware or APL.
@@ -15,9 +15,9 @@ From **Releases** (right-hand side of the GitHub page):
 
 | System | File |
 |---|---|
-| Windows 10/11 | `HeadSmooth.exe` |
-| Mac with Apple Silicon (M1/M2/M3/M4) | `HeadSmooth-macOS-AppleSilicon.zip` |
-| Mac with Intel processor | `HeadSmooth-macOS-Intel.zip` |
+| Windows 10/11 | `HeadTrackingSmoother.exe` |
+| Mac with Apple Silicon (M1/M2/M3/M4) | `HeadTrackingSmoother-macOS-AppleSilicon.zip` |
+| Mac with Intel processor | `HeadTrackingSmoother-macOS-Intel.zip` |
 
 All builds are portable – no installation needed.
 
@@ -25,9 +25,9 @@ All builds are portable – no installation needed.
 
 1. **Bridgehead:** keep the *APL Virtuoso* profile, change nothing (it sends to port 8000).
 2. **Virtuoso:** Head tracking → *OSC* → gear icon → profile *APL*, set **port to 8001**.
-3. Start **HeadSmooth**. The dot turns green and shows "Receiving".
+3. Start **Head Tracking Smoother**. The dot turns green and shows "Receiving".
 
-Ports can be changed in HeadSmooth ("Apply"). Settings are saved.
+Ports can be changed in Head Tracking Smoother ("Apply"). Settings are saved.
 
 ### Adjusting the smoothing
 
@@ -52,19 +52,19 @@ The app is not commercially code-signed, so the system warns once:
 ## Troubleshooting
 
 - **"Port 8000 is already in use":** Virtuoso is still listening on 8000 → set Virtuoso to 8001,
-  then click "Apply" in HeadSmooth. Or HeadSmooth is already running.
+  then click "Apply" in Head Tracking Smoother. Or Head Tracking Smoother is already running.
 - **Yellow "waiting for Bridgehead":** Bridgehead is not running, the tracker is not connected,
   or Bridgehead sends to a port other than "Input".
-- Crashes are logged to `%APPDATA%\HeadSmooth\crash.log` (Windows) or
-  `~/Library/Application Support/HeadSmooth/crash.log` (Mac).
+- Crashes are logged to `%APPDATA%\Head Tracking Smoother\crash.log` (Windows) or
+  `~/Library/Application Support/Head Tracking Smoother/crash.log` (Mac).
 
 ## Building from source
 
 ```
 pip install -r requirements.txt
 python make_icons.py
-pyinstaller --onefile --windowed --name HeadSmooth --icon icon.ico app.py      # Windows
-pyinstaller --windowed --name HeadSmooth --icon icon.icns app.py               # Mac
+pyinstaller --onefile --windowed --name "Head Tracking Smoother" --icon icon.ico app.py      # Windows
+pyinstaller --windowed --name "Head Tracking Smoother" --icon icon.icns app.py               # Mac
 ```
 
 Tests: `python -m unittest discover -s tests`

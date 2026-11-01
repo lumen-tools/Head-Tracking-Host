@@ -1,4 +1,4 @@
-"""HeadSmooth - smooths Bridgehead head tracking for APL Virtuoso (Windows & macOS)."""
+"""Head Tracking Smoother - smooths Bridgehead head tracking for APL Virtuoso (Windows & macOS)."""
 from __future__ import annotations
 
 import json
@@ -10,7 +10,7 @@ from tkinter import messagebox, ttk
 
 from smoother_core import Engine
 
-APP_NAME = "HeadSmooth"
+APP_NAME = "Head Tracking Smoother"
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
 DEFAULTS = {"in_port": 8000, "out_port": 8001, "smooth_ms": 40, "bypass": False}
@@ -245,7 +245,7 @@ class App(tk.Tk):
 
             if self.tray_icon is None:
                 self.tray_icon = pystray.Icon(
-                    APP_NAME,
+                    "head_tracking_smoother",
                     make_icon_image(64),
                     APP_NAME,
                     pystray.Menu(

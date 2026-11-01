@@ -25,11 +25,11 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: HeadSmooth-Windows
+            artifact: HeadTrackingSmoother-Windows
           - os: macos-latest
-            artifact: HeadSmooth-macOS-AppleSilicon
+            artifact: HeadTrackingSmoother-macOS-AppleSilicon
           - os: macos-15-intel
-            artifact: HeadSmooth-macOS-Intel
+            artifact: HeadTrackingSmoother-macOS-Intel
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -42,18 +42,18 @@ jobs:
       - name: Build Windows EXE
         if: runner.os == 'Windows'
         run: |
-          pyinstaller --noconfirm --onefile --windowed --name HeadSmooth --icon icon.ico app.py
+          pyinstaller --noconfirm --onefile --windowed --name "Head Tracking Smoother" --icon icon.ico app.py
           mkdir out
-          copy dist\HeadSmooth.exe out\HeadSmooth.exe
+          copy "dist\Head Tracking Smoother.exe" "out\HeadTrackingSmoother.exe"
         shell: cmd
 
       - name: Build macOS app
         if: runner.os == 'macOS'
         run: |
-          pyinstaller --noconfirm --windowed --name HeadSmooth --icon icon.icns \
-            --osx-bundle-identifier io.github.headsmooth app.py
+          pyinstaller --noconfirm --windowed --name "Head Tracking Smoother" --icon icon.icns \
+            --osx-bundle-identifier io.github.lumen-tools.head-tracking-smoother app.py
           mkdir out
-          ditto -c -k --keepParent dist/HeadSmooth.app "out/${{ matrix.artifact }}.zip"
+          ditto -c -k --keepParent "dist/Head Tracking Smoother.app" "out/${{ matrix.artifact }}.zip"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -79,5 +79,5 @@ jobs:
             exit 0
           fi
           gh release create "$TAG" artifacts/*/* --target "${GITHUB_SHA}" \
-            --repo "${GITHUB_REPOSITORY}" --title "HeadSmooth $TAG" \
-            --notes "Windows: download HeadSmooth.exe and run it. Mac: download the matching ZIP, unzip it and open HeadSmooth.app (see README)."
+            --repo "${GITHUB_REPOSITORY}" --title "Head Tracking Smoother $TAG" \
+            --notes "Windows: download HeadTrackingSmoother.exe and run it. Mac: download the matching ZIP, unzip it and open Head Tracking Smoother.app (see README)."
