@@ -349,6 +349,13 @@ public:
     {
         settings = openSettings();
         addDefaultFormatsToManager (formatManager);
+
+        // Startup crash guard: if the previous start never finished, start without opening the
+        // saved audio device and plugin. The flag is written to disk right away and cleared once
+        // the app has been running for a few seconds (and on a normal quit).
+        safeMode = settings->getBoolValue ("startupPending", false);
+        settings->setValue ("startupPending", true);
+        settings->saveIfNeeded();
         setSize (minWidth, barHeight + 360);
 
         addAndMakeVisible (statusDot);
@@ -458,7 +465,9 @@ public:
 
         refreshPluginList();
         const File lastPlugin (settings->getValue ("pluginPath"));
-        if (lastPlugin.exists())
+        if (safeMode)
+            pluginBox.setSelectedId (0, dontSendNotification); // choosing it again loads it
+        else if (lastPlugin.exists())
             loadPlugin (lastPlugin);
 
         startTimerHz (2);
@@ -468,17 +477,22 @@ public:
     void initialiseAudio (bool inputAllowed)
     {
         microphoneDenied = ! inputAllowed;
-        std::unique_ptr<XmlElement> savedAudio (settings->getXmlValue ("audioDevice"));
+        // In safe mode the saved device is not opened (the system default is used instead).
+        std::unique_ptr<XmlElement> savedAudio (safeMode ? nullptr : settings->getXmlValue ("audioDevice"));
         const auto audioError = deviceManager.initialise (inputAllowed ? 16 : 0, 16, savedAudio.get(), true);
         if (audioError.isNotEmpty())
             lastError = "Audio device: " + audioError;
         audioInitialised = true;
+        audioStartTime = lastCallbackTime = Time::getMillisecondCounter();
+        lastCallbackCount = engine.getCallbackCount();
         checkFeedback();
     }
 
     ~MainComponent() override
     {
         saveState();
+        settings->setValue ("startupPending", false);
+        settings->saveIfNeeded();
         deviceManager.removeChangeListener (this);
         receiver.removeListener (this);
         receiver.disconnect();
@@ -490,7 +504,7 @@ public:
     {
         // Only store the audio device once it has been opened (on the Mac that waits for the
         // microphone permission), so an early quit doesn't overwrite the saved device.
-        if (audioInitialised)
+        if (audioInitialised && (! safeMode || audioSettingsOpened))
             if (auto xml = deviceManager.createStateXml())
                 settings->setValue ("audioDevice", xml.get());
         if (plugin != nullptr)
@@ -846,7 +860,13 @@ private:
 
     //==============================================================================
     // Audio safety: a loopback device (e.g. BlackHole) as input AND output would feed back.
-    void changeListenerCallback (ChangeBroadcaster*) override { checkFeedback(); }
+    void changeListenerCallback (ChangeBroadcaster*) override
+    {
+        // Any device change (by the user or the watchdog) starts a new grace period.
+        audioStartTime = lastCallbackTime = Time::getMillisecondCounter();
+        streamWasRunning = false;
+        checkFeedback();
+    }
 
     void checkFeedback()
     {
@@ -964,28 +984,52 @@ private:
         {
             lastCallbackCount = count;
             lastCallbackTime = now;
-            reconnecting = false;
-        }
-
-        const bool error = engine.takeDeviceError();
-        const bool stalled = device != nullptr && now - lastCallbackTime > 2000;
-        const bool lost = device == nullptr && settings->containsKey ("audioDevice");
-
-        if ((error || stalled || lost) && now - lastRestartAttempt > 3000)
-        {
-            lastRestartAttempt = now;
-            reconnecting = true;
-            deviceManager.closeAudioDevice();
-            deviceManager.restartLastAudioDevice();
-            if (deviceManager.getCurrentAudioDevice() == nullptr)
+            if (now - audioStartTime > 1000)
+                streamWasRunning = true;   // ran on its own for a moment - a real, started stream
+            if (recovering && now - lastRestartAttempt > 10000)
             {
-                // Fall back to the saved device setup (e.g. after the device was unplugged).
-                std::unique_ptr<XmlElement> saved (settings->getXmlValue ("audioDevice"));
-                deviceManager.initialise (microphoneDenied ? 0 : 16, 16, saved.get(), true);
+                recovering = false;        // stable again after a reconnect
+                restartAttempts = 0;
             }
-            lastCallbackTime = now; // give the reopened device time to start
-            checkFeedback();
         }
+
+        // Clear the startup crash flag once the app has been running for a while.
+        if (! startupCleared && now - audioStartTime > 8000)
+        {
+            startupCleared = true;
+            settings->setValue ("startupPending", false);
+            settings->saveIfNeeded();
+        }
+
+        const bool error   = engine.takeDeviceError();
+        const bool inGrace = now - audioStartTime < 5000;          // device may still be starting
+        const bool stalled = device != nullptr && streamWasRunning && now - lastCallbackTime > 2000;
+        const bool lost    = device == nullptr && streamWasRunning;
+        const bool stillDown = recovering && now - lastCallbackTime > 2000;
+
+        static constexpr uint32 backoff[] = { 3000, 10000, 30000 };
+        const auto wait = backoff[jmin (restartAttempts, 2)];
+
+        if (inGrace || restartAttempts >= 5 || now - lastRestartAttempt < wait)
+            return;
+        if (! (stalled || lost || stillDown || (error && streamWasRunning)))
+            return;
+
+        lastRestartAttempt = now;
+        ++restartAttempts;
+        recovering = true;
+        streamWasRunning = false;
+
+        deviceManager.closeAudioDevice();
+        deviceManager.restartLastAudioDevice();
+        if (deviceManager.getCurrentAudioDevice() == nullptr)
+        {
+            // Fall back to the saved device setup (e.g. after the device was unplugged).
+            std::unique_ptr<XmlElement> saved (settings->getXmlValue ("audioDevice"));
+            deviceManager.initialise (microphoneDenied ? 0 : 16, 16, saved.get(), true);
+        }
+        audioStartTime = lastCallbackTime = Time::getMillisecondCounter();
+        checkFeedback();
     }
 
     void timerCallback() override
@@ -1001,13 +1045,23 @@ private:
         Colour c = green;
         String status, detail;
 
-        if (plugin == nullptr)
+        if (plugin == nullptr && safeMode)
+        {
+            c = amber; status = "Safe start - the last start did not complete";
+            detail = "The saved audio device and plugin were not opened. Choose them again - your settings are kept.";
+        }
+        else if (plugin == nullptr)
         {
             c = lastError.isNotEmpty() ? red : amber;
             status = "Choose a plugin";
             detail = lastError.isNotEmpty() ? lastError : "Pick it from the list or click \"Browse...\".";
         }
-        else if (reconnecting)
+        else if (recovering && restartAttempts >= 5 && now - lastCallbackTime > 2000)
+        {
+            c = red; status = "Audio device not responding";
+            detail = "Open \"Audio settings...\" and choose the device again.";
+        }
+        else if (recovering && now - lastCallbackTime > 1000)
         {
             c = amber; status = "Reconnecting audio device...";
             detail = "The audio stream stopped (e.g. power saving or a sample rate change). Retrying automatically.";
@@ -1215,6 +1269,7 @@ private:
 
     void showAudioSettings()
     {
+        audioSettingsOpened = true;
         auto* selector = new AudioDeviceSelectorComponent (deviceManager, 0, 16, 2, 16, false, false, true, false);
         selector->setSize (540, 480);
         DialogWindow::LaunchOptions o;
@@ -1248,8 +1303,11 @@ private:
     Array<File> installedPlugins;
     std::array<AxisParam, 3> params;
     String activeLayout, lastError, lastAddress;
-    bool feedbackRisk = false, microphoneDenied = false, audioInitialised = false, reconnecting = false;
-    uint32 lastCallbackCount = 0, lastCallbackTime = 0, lastRestartAttempt = 0;
+    bool feedbackRisk = false, microphoneDenied = false, audioInitialised = false;
+    bool safeMode = false, startupCleared = false, audioSettingsOpened = false;
+    bool streamWasRunning = false, recovering = false;
+    int restartAttempts = 0;
+    uint32 lastCallbackCount = 0, lastCallbackTime = 0, lastRestartAttempt = 0, audioStartTime = 0;
 
     OSCReceiver receiver;
     int currentPort = 0;
