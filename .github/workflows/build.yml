@@ -60,9 +60,46 @@ jobs:
           name: ${{ matrix.artifact }}
           path: out/*
 
+  build-host:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: HeadTrackingHost-Windows
+          - os: macos-latest
+            artifact: HeadTrackingHost-macOS
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Windows EXE
+        if: runner.os == 'Windows'
+        working-directory: host
+        run: |
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+          cmake --build build --config Release --parallel
+          mkdir ..\out
+          copy "build\HeadTrackingHost_artefacts\Release\Head Tracking Host.exe" "..\out\HeadTrackingHost.exe"
+        shell: cmd
+
+      - name: Build macOS app (Apple Silicon + Intel)
+        if: runner.os == 'macOS'
+        working-directory: host
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release --parallel 4
+          mkdir -p ../out
+          ditto -c -k --keepParent "build/HeadTrackingHost_artefacts/Release/Head Tracking Host.app" "../out/${{ matrix.artifact }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: out/*
+
   release:
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
-    needs: build
+    needs: [build, build-host]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

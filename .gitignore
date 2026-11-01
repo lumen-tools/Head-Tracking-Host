@@ -5,3 +5,4 @@ out/
 *.spec
 icon.ico
 icon.icns
+host/build/
