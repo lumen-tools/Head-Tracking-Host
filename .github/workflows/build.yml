@@ -80,6 +80,16 @@ jobs:
             gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/$TAG" \
               -f sha="${GITHUB_SHA}" -F force=true >/dev/null
             gh release upload "$TAG" artifacts/*/* --clobber --repo "${GITHUB_REPOSITORY}"
+            # Remove files from older builds that this build no longer produces (e.g. after a rename).
+            CURRENT=$(for f in artifacts/*/*; do basename "$f"; done)
+            RELEASE_ID=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$TAG" --jq .id)
+            gh api "repos/${GITHUB_REPOSITORY}/releases/$RELEASE_ID/assets" --jq '.[] | "\(.id) \(.name)"' |
+              while read -r ID NAME; do
+                if ! grep -qxF "$NAME" <<< "$CURRENT"; then
+                  echo "Removing stale asset $NAME"
+                  gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/$ID"
+                fi
+              done
             exit 0
           fi
           gh release create "$TAG" artifacts/*/* --target "${GITHUB_SHA}" \
