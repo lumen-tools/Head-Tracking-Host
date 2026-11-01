@@ -23,9 +23,11 @@ From **Releases** (right-hand side of the GitHub page):
 | Windows 10/11 | `HeadTrackingHost.exe` |
 | Mac (Apple Silicon and Intel) | `HeadTrackingHost-macOS.zip` |
 
-Portable – no installation needed, settings are stored next to the program.
-**Updating:** replace only the EXE or the app and keep `Head Tracking Host.settings` – all settings stay. Requires the renderer as a **VST3 plugin** (for Virtuoso it is
-installed together with Virtuoso).
+Portable – no installation needed, settings are stored next to the program. Requires the renderer
+as a **VST3 plugin** (for Virtuoso it is installed together with Virtuoso).
+
+**Updating:** replace only the EXE or the app and keep `Head Tracking Host.settings` next to it –
+all settings stay.
 
 ## Setup
 
