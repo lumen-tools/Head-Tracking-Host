@@ -176,8 +176,6 @@ public:
         if (isPositiveAndBelow (pluginChannel, maxChannels))
             inputMap[(size_t) pluginChannel] = deviceChannel;
     }
-    bool wasTripped() const { return tripped; }
-    void resetTrip() { loudSamples = 0; fadePosition = 0; tripped = false; }
 
     void audioDeviceAboutToStart (AudioIODevice* device) override
     {
@@ -186,11 +184,8 @@ public:
 
         // Soft start after every device (re)start: short silence, then fade in.
         silenceSamples = (int) (0.15 * sampleRate);
-        fadeSamples    = (int) (0.35 * sampleRate);
+        fadeSamples    = (int) (2.0 * sampleRate);  // 2 s fade-in
         fadePosition   = 0;
-        tripped        = false;
-        loudSamples    = 0;
-        tripSamples    = (int) (0.5 * sampleRate);
 
         const int deviceChannels = jmax (device->getActiveInputChannels().countNumberOfSetBits(),
                                          device->getActiveOutputChannels().countNumberOfSetBits());
@@ -226,7 +221,7 @@ public:
     {
         callbackCount.fetch_add (1);
         auto* p = plugin;
-        if (p == nullptr || muted || tripped || numSamples > buffer.getNumSamples())
+        if (p == nullptr || muted || numSamples > buffer.getNumSamples())
         {
             clearOutputs (outputs, numOutputs, numSamples);
             return;
@@ -253,7 +248,6 @@ public:
             // Dry signal for A/B comparisons: the routed input, downmixed to stereo.
             writeDownmix (block, jmin (channels, pluginIns), outputs, numOutputs, numSamples);
             applySoftStart (outputs, numOutputs, numSamples);
-            checkRunaway (outputs, numOutputs, numSamples);
             return;
         }
 
@@ -279,7 +273,6 @@ public:
         }
 
         applySoftStart (outputs, numOutputs, numSamples);
-        checkRunaway (outputs, numOutputs, numSamples);
     }
 
 private:
@@ -327,26 +320,8 @@ private:
         fadePosition += numSamples;
     }
 
-    // Emergency stop: if the output clips continuously (typical for feedback), mute until the
-    // audio device is restarted (e.g. after changing the audio settings).
-    void checkRunaway (float* const* outputs, int numOutputs, int numSamples)
-    {
-        float peak = 0.0f;
-        for (int ch = 0; ch < numOutputs; ++ch)
-            if (outputs[ch] != nullptr)
-                peak = jmax (peak, FloatVectorOperations::findMaximum (outputs[ch], numSamples),
-                             -FloatVectorOperations::findMinimum (outputs[ch], numSamples));
-
-        loudSamples = peak >= 1.0f ? loudSamples + numSamples : 0;
-        if (loudSamples > tripSamples)
-        {
-            tripped = true;
-            clearOutputs (outputs, numOutputs, numSamples);
-        }
-    }
-
     AudioPluginInstance* plugin = nullptr;
-    std::atomic<bool> muted { false }, tripped { false }, bypass { false }, deviceError { false };
+    std::atomic<bool> muted { false }, bypass { false }, deviceError { false };
     std::atomic<uint32> callbackCount { 0 };
     std::array<std::pair<float, float>, maxChannels> downmix {};
     struct InputMap
@@ -356,7 +331,6 @@ private:
         std::array<std::atomic<int>, maxChannels> channels;
     };
     InputMap inputMap;
-    int loudSamples = 0, tripSamples = 24000;
     AudioBuffer<float> buffer;
     MidiBuffer midi;
     double sampleRate = 48000.0;
@@ -392,7 +366,7 @@ public:
         addAndMakeVisible (browseButton);
         browseButton.onClick = [this] { browseForPlugin(); };
         addAndMakeVisible (audioButton);
-        audioButton.onClick = [this] { engine.resetTrip(); showAudioSettings(); };
+        audioButton.onClick = [this] { showAudioSettings(); };
 
         addAndMakeVisible (portLabel);
         addAndMakeVisible (portEditor);
@@ -1010,7 +984,6 @@ private:
                 deviceManager.initialise (microphoneDenied ? 0 : 16, 16, saved.get(), true);
             }
             lastCallbackTime = now; // give the reopened device time to start
-            engine.resetTrip();     // fade in softly after reconnecting
             checkFeedback();
         }
     }
@@ -1052,11 +1025,6 @@ private:
         {
             c = amber; status = "Bypassed - you hear the dry input";
             detail = "Click \"Bypass (dry)\" again to hear the plugin.";
-        }
-        else if (engine.wasTripped())
-        {
-            c = red; status = "Output muted: continuous overload (feedback?)";
-            detail = "Make sure the output is not your loopback device. Clicking \"Audio settings...\" unmutes with a soft fade-in.";
         }
         else if (feedbackRisk)
         {

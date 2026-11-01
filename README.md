@@ -23,7 +23,8 @@ From **Releases** (right-hand side of the GitHub page):
 | Windows 10/11 | `HeadTrackingHost.exe` |
 | Mac (Apple Silicon and Intel) | `HeadTrackingHost-macOS.zip` |
 
-Portable – no installation needed, settings are stored next to the program. Requires the renderer as a **VST3 plugin** (for Virtuoso it is
+Portable – no installation needed, settings are stored next to the program.
+**Updating:** replace only the EXE or the app and keep `Head Tracking Host.settings` – all settings stay. Requires the renderer as a **VST3 plugin** (for Virtuoso it is
 installed together with Virtuoso).
 
 ## Setup
@@ -62,11 +63,9 @@ before, set that matrix back to normal.)
 
 ## Hearing protection
 
-- After every start or audio device change the sound fades in softly.
+- After every start, audio device change or automatic reconnect the sound fades in over 2 seconds.
 - If a loopback device (e.g. BlackHole, VB-Cable) is input **and** output – including FlexASIO's
   configured devices – the output stays muted and the app shows a warning.
-- If the output clips continuously for half a second (typical for feedback), the output is muted.
-  Fix the output channels, then click **Audio settings...** to unmute with a fade-in.
 
 ## Automatic reconnect
 
