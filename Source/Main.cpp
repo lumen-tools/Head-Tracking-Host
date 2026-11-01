@@ -16,12 +16,12 @@ using namespace juce;
 
 namespace
 {
-constexpr int defaultOscPort = 8000;
+constexpr int defaultOscPort = 9000; // Bridgehead profile "IEM Scene Rotator YPR"
 constexpr int minWidth = 900;
 constexpr int barHeight = 190;
 const std::array<const char*, 3> axisNames { "Yaw", "Pitch", "Roll" };
 const std::array<float, 3> fallbackRange { 180.0f, 90.0f, 90.0f }; // +/- degrees if the plugin text can't be parsed
-const std::array<bool, 3> defaultInvert { false, true, false };     // matches Bridgehead "DaVinci Resolve" -> Virtuoso
+const std::array<bool, 3> defaultInvert { false, true, false };     // tracker's raw angles -> Virtuoso
 
 const Colour green (0xff1f9d55);
 const Colour amber (0xffd4a017);
@@ -332,6 +332,13 @@ public:
         addAndMakeVisible (portEditor);
         portEditor.setInputRestrictions (5, "0123456789");
         portEditor.setJustification (Justification::centred);
+        // One-time switch from the earlier default (port 8000, DaVinci Resolve profile) to IEM (9000).
+        if (! settings->getBoolValue ("iemDefaults", false))
+        {
+            if (settings->getIntValue ("oscPort", 8000) == 8000)
+                settings->setValue ("oscPort", defaultOscPort);
+            settings->setValue ("iemDefaults", true);
+        }
         portEditor.setText (String (settings->getIntValue ("oscPort", defaultOscPort)));
         portEditor.onReturnKey = portEditor.onFocusLost = [this] { applyPort(); };
 
@@ -762,29 +769,66 @@ private:
         settings->setValue ("oscPort", port);
     }
 
+    static bool numberAt (const OSCMessage& m, int index, float& out)
+    {
+        if (m[index].isFloat32())     { out = m[index].getFloat32(); return true; }
+        if (m[index].isInt32())       { out = (float) m[index].getInt32(); return true; }
+        return false;
+    }
+
+    // Accepts the Bridgehead profile "IEM Scene Rotator YPR" (separate /SceneRotator/yaw, /pitch,
+    // /roll messages; pitch and roll are sign-flipped by that profile) and a combined /ypr message
+    // with the tracker's raw yaw, pitch, roll. Internally everything uses the raw angles.
     void oscMessageReceived (const OSCMessage& m) override
     {
         ++messagesReceived;
-        lastAddress = m.getAddressPattern().toString();
+        const auto address = m.getAddressPattern().toString();
+        lastAddress = address;
 
-        if (m.size() != 3)
-            return;
-        std::array<float, 3> deg {};
-        for (int i = 0; i < 3; ++i)
+        if (m.size() == 1)
         {
-            if (m[i].isFloat32())     deg[(size_t) i] = m[i].getFloat32();
-            else if (m[i].isInt32())  deg[(size_t) i] = (float) m[i].getInt32();
-            else return;
+            float value = 0.0f;
+            if (! numberAt (m, 0, value))
+                return;
+            const auto lower = address.toLowerCase();
+            const bool iem = lower.startsWith ("/scenerotator/");
+            for (size_t i = 0; i < 3; ++i)
+            {
+                if (lower.endsWith (String ("/") + String (axisNames[i]).toLowerCase()))
+                {
+                    const float raw = (iem && i > 0) ? -value : value; // undo the IEM profile's -pitch, -roll
+                    noteAngles();
+                    applyAxis (i, raw);
+                }
+            }
+            return;
         }
 
+        if (m.size() == 3)
+        {
+            std::array<float, 3> deg {};
+            for (int i = 0; i < 3; ++i)
+                if (! numberAt (m, i, deg[(size_t) i]))
+                    return;
+            noteAngles();
+            for (size_t i = 0; i < 3; ++i)
+                applyAxis (i, deg[i]);
+        }
+    }
+
+    void noteAngles()
+    {
         ++angleMessages;
         lastAngleTime = Time::getMillisecondCounter();
-        for (size_t i = 0; i < 3; ++i)
+    }
+
+    void applyAxis (size_t i, float rawDegrees)
+    {
         {
             auto& a = params[i];
             if (a.param == nullptr)
-                continue;
-            float d = invertButtons[i].getToggleState() ? -deg[i] : deg[i];
+                return;
+            float d = invertButtons[i].getToggleState() ? -rawDegrees : rawDegrees;
             const float span = a.high - a.low;
             if (std::abs (span) >= 359.0f)
             {
@@ -858,12 +902,12 @@ private:
         else if (receivingAnything)
         {
             c = amber; status = "Receiving " + lastAddress + " - but no yaw/pitch/roll";
-            detail = "Choose the Bridgehead profile \"DaVinci Resolve\".";
+            detail = "Choose the Bridgehead profile \"IEM Scene Rotator YPR\".";
         }
         else
         {
             c = amber; status = "Waiting for Bridgehead on port " + String (currentPort);
-            detail = "Bridgehead profile: DaVinci Resolve.  Input: " + activeLayout;
+            detail = "Bridgehead profile: IEM Scene Rotator YPR.  Input: " + activeLayout;
         }
 
         statusDot.colour = c;

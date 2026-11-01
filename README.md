@@ -8,7 +8,7 @@ while turning their Yaw/Pitch/Roll knobs does not. Head Tracking Host loads the 
 plugin, plays your audio through it and turns those knobs with the head tracking from Bridgehead.
 
 ```
-Supperware → Bridgehead (OSC /ypr) → Head Tracking Host (renderer plugin inside) → headphones
+Supperware → Bridgehead (OSC, IEM profile) → Head Tracking Host (renderer plugin inside) → headphones
 ```
 
 Works with any VST3 plugin that has yaw/pitch/roll parameters. Unofficial tool, not affiliated
@@ -29,9 +29,8 @@ installed together with Virtuoso).
 ## Setup
 
 1. **Close the renderer's standalone app** (e.g. Virtuoso standalone).
-2. **Bridgehead:** profile **DaVinci Resolve**, tracking rate **25 Hz** (higher rates work too).
-   Despite its name, this profile simply sends the tracker's raw yaw/pitch/roll in one message
-   (`/ypr`) to port 8000 – exactly what Head Tracking Host needs.
+2. **Bridgehead:** profile **IEM Scene Rotator YPR** (sends yaw, pitch and roll to port 9000),
+   tracking rate **25 Hz** (higher rates work too).
 3. **Start Head Tracking Host** and choose the plugin from the **Plugin** list
    (or **Browse...** for a plugin in another folder). Next time it opens the last plugin automatically.
 4. **Audio settings...** – the same devices you use for the standalone app:
@@ -46,7 +45,7 @@ installed together with Virtuoso).
 6. **In the plugin:** turn off its own head tracking input. Virtuoso: Head tracking → **Manual**.
 7. **Input:** the channel layout of your source – 7.1 by default.
 8. If an axis turns the wrong way, tick **Invert** for it. Pitch is inverted by default, which is
-   correct for Virtuoso with the Bridgehead profile DaVinci Resolve.
+   correct for Virtuoso with the Bridgehead profile IEM Scene Rotator YPR.
 
 Everything is saved and restored on the next start: audio devices, Bridgehead port, the last plugin
 and, per plugin, its own settings, the chosen parameters and the invert options.
@@ -75,9 +74,9 @@ The app is not commercially code-signed, so the system warns once:
 
 ## Troubleshooting
 
-- **Red "port in use":** another program listens on port 8000 (e.g. Virtuoso standalone with OSC
+- **Red "port in use":** another program listens on port 9000 (e.g. Virtuoso standalone with OSC
   head tracking). Close it – the app connects automatically.
-- **Yellow "no yaw/pitch/roll":** Bridgehead uses another profile → choose **DaVinci Resolve**.
+- **Yellow "no yaw/pitch/roll":** Bridgehead uses another profile → choose **IEM Scene Rotator YPR**.
 - **No sound:** check the channels in **Audio settings...** and, on the Mac, microphone access in
   *System Settings → Privacy & Security → Microphone*.
 - Settings are stored in `%APPDATA%\Head Tracking Host` (Windows) or
