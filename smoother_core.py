@@ -129,7 +129,7 @@ class Engine:
 
     def __init__(self):
         self.smooth_ms = 40.0
-        self.rate_hz = 200.0
+        self.rate_hz = 1000.0  # one update per millisecond -> tiny steps per audio block
         self.bypass = False
         self.dest = ("127.0.0.1", 8001)
         self.received = 0
