@@ -49,10 +49,11 @@ installed together with Virtuoso).
 Everything is saved and restored on the next start: audio devices, Bridgehead port, the last plugin
 and, per plugin, its own settings, the chosen parameters and the invert options.
 
-**Surround channels swapped?** On Windows the 7.1 side and rear surrounds often arrive swapped.
-Tick **Swap side/rear surrounds** – it swaps Lss ↔ Lrs and Rss ↔ Rrs before the audio reaches
-the plugin, so it works with every plugin. (If you corrected this in a plugin's own matrix before,
-set that matrix back to normal.)
+**Input channels:** click **Channels...** to choose which audio input feeds each plugin channel
+(L, R, C, LFE, Lss, Rss, Lrs, Rrs …). This works with every plugin. On Windows the 7.1 side and
+rear surrounds often arrive swapped – the preset **Swap side/rear (Windows)** fixes that in one
+click, **Reset (1:1)** restores the normal order. (If you corrected this in a plugin's own matrix
+before, set that matrix back to normal.)
 
 ## Hearing protection
 

@@ -139,7 +139,13 @@ class HostEngine : public AudioIODeviceCallback
 public:
     void setPlugin (AudioPluginInstance* p) { plugin = p; }
     void setMuted (bool m) { muted = m; }
-    void setSwapSurrounds (bool s) { swapSurrounds = s; }
+    static constexpr int maxChannels = 32;
+    // Which device input channel feeds each plugin input channel (-1 = silent).
+    void setInputSource (int pluginChannel, int deviceChannel)
+    {
+        if (isPositiveAndBelow (pluginChannel, maxChannels))
+            inputMap[(size_t) pluginChannel] = deviceChannel;
+    }
     bool wasTripped() const { return tripped; }
     void resetTrip() { loudSamples = 0; fadePosition = 0; tripped = false; }
 
@@ -198,12 +204,9 @@ public:
 
         for (int ch = 0; ch < channels; ++ch)
         {
-            // Optional fix for the common Windows 7.1 order: side (4/5) <-> rear (6/7) surrounds.
-            int src = ch;
-            if (swapSurrounds && numInputs >= 8 && pluginIns >= 8 && ch >= 4 && ch <= 7)
-                src = ch < 6 ? ch + 2 : ch - 2;
+            const int src = ch < maxChannels ? inputMap[(size_t) ch].load() : ch;
 
-            if (src < numInputs && ch < pluginIns && inputs[src] != nullptr)
+            if (isPositiveAndBelow (src, numInputs) && ch < pluginIns && inputs[src] != nullptr)
                 FloatVectorOperations::copy (block.getWritePointer (ch), inputs[src], numSamples);
             else
                 block.clear (ch, 0, numSamples);
@@ -279,7 +282,14 @@ private:
     }
 
     AudioPluginInstance* plugin = nullptr;
-    std::atomic<bool> muted { false }, tripped { false }, swapSurrounds { false };
+    std::atomic<bool> muted { false }, tripped { false };
+    struct InputMap
+    {
+        InputMap() { for (int i = 0; i < maxChannels; ++i) channels[(size_t) i] = i; }
+        std::atomic<int>& operator[] (size_t i) { return channels[i]; }
+        std::array<std::atomic<int>, maxChannels> channels;
+    };
+    InputMap inputMap;
     int loudSamples = 0, tripSamples = 24000;
     AudioBuffer<float> buffer;
     MidiBuffer midi;
@@ -334,16 +344,11 @@ public:
                                         dontSendNotification);
         layoutBox.onChange = [this] { settings->setValue ("layout", layoutBox.getSelectedItemIndex()); applyLayout(); };
 
-        addAndMakeVisible (swapButton);
-        swapButton.setButtonText ("Swap side/rear surrounds (Lss <-> Lrs, Rss <-> Rrs)");
-        swapButton.setTooltip ("Fixes sources whose 7.1 side and rear surround channels arrive swapped (common on Windows).");
-        swapButton.setToggleState (settings->getBoolValue ("swapSurrounds", false), dontSendNotification);
-        engine.setSwapSurrounds (swapButton.getToggleState());
-        swapButton.onClick = [this]
-        {
-            engine.setSwapSurrounds (swapButton.getToggleState());
-            settings->setValue ("swapSurrounds", swapButton.getToggleState());
-        };
+        addAndMakeVisible (channelsButton);
+        channelsButton.onClick = [this] { showChannelRouting(); };
+        addAndMakeVisible (routingLabel);
+        routingLabel.setColour (Label::textColourId, Colours::lightgrey);
+        loadInputMap();
 
         // Row 3: which plugin parameter is yaw / pitch / roll
         for (size_t i = 0; i < 3; ++i)
@@ -452,7 +457,10 @@ public:
         }
 
         bar.removeFromTop (8);
-        swapButton.setBounds (bar.removeFromTop (24).withWidth (420));
+        auto row4 = bar.removeFromTop (26);
+        channelsButton.setBounds (row4.removeFromLeft (110));
+        row4.removeFromLeft (10);
+        routingLabel.setBounds (row4);
 
         viewport.setBounds (area);
     }
@@ -865,6 +873,156 @@ private:
     }
 
     //==============================================================================
+    //==============================================================================
+    // Input channel routing: which device input feeds each plugin input channel.
+    void loadInputMap()
+    {
+        inputMap.clear();
+        auto tokens = StringArray::fromTokens (settings->getValue ("inputMap"), ",", {});
+        if (tokens.isEmpty() && settings->getBoolValue ("swapSurrounds", false))
+            tokens = StringArray::fromTokens ("0,1,2,3,6,7,4,5", ",", {}); // from the old swap option
+        for (auto& t : tokens)
+            inputMap.push_back (t.trim().getIntValue());
+        applyInputMap();
+    }
+
+    int sourceFor (int pluginChannel) const
+    {
+        return pluginChannel < (int) inputMap.size() ? inputMap[(size_t) pluginChannel] : pluginChannel;
+    }
+
+    void setSource (int pluginChannel, int deviceChannel)
+    {
+        while ((int) inputMap.size() <= pluginChannel)
+            inputMap.push_back ((int) inputMap.size());
+        inputMap[(size_t) pluginChannel] = deviceChannel;
+        applyInputMap();
+    }
+
+    void applyInputMap()
+    {
+        // Drop trailing identity entries so a plain 1:1 routing is stored as "".
+        while (! inputMap.empty() && inputMap.back() == (int) inputMap.size() - 1)
+            inputMap.pop_back();
+
+        StringArray tokens;
+        for (auto v : inputMap)
+            tokens.add (String (v));
+        settings->setValue ("inputMap", tokens.joinIntoString (","));
+        settings->removeValue ("swapSurrounds");
+
+        for (int ch = 0; ch < HostEngine::maxChannels; ++ch)
+            engine.setInputSource (ch, sourceFor (ch));
+
+        routingLabel.setText (inputMap.empty() ? "Input routing: 1:1" : "Input routing: custom", dontSendNotification);
+    }
+
+    StringArray pluginChannelNames() const
+    {
+        StringArray names;
+        if (plugin != nullptr && plugin->getBusCount (true) > 0)
+        {
+            const auto layout = plugin->getBus (true, 0)->getCurrentLayout();
+            for (int i = 0; i < layout.size(); ++i)
+                names.add (AudioChannelSet::getAbbreviatedChannelTypeName (layout.getTypeOfChannel (i)));
+        }
+        return names;
+    }
+
+    StringArray deviceInputNames() const
+    {
+        StringArray names;
+        if (auto* device = deviceManager.getCurrentAudioDevice())
+        {
+            const auto all = device->getInputChannelNames();
+            const auto active = device->getActiveInputChannels();
+            for (int i = 0; i < all.size(); ++i)
+                if (active[i])
+                    names.add (all[i]);
+        }
+        return names;
+    }
+
+    class RoutingComponent : public Component
+    {
+    public:
+        explicit RoutingComponent (MainComponent& o) : owner (o)
+        {
+            const auto channels = owner.pluginChannelNames();
+            const auto inputs = owner.deviceInputNames();
+
+            addAndMakeVisible (title);
+            title.setText (channels.isEmpty() ? "Load a plugin first." : "Plugin input  <-  audio device input",
+                           dontSendNotification);
+
+            for (int ch = 0; ch < channels.size(); ++ch)
+            {
+                auto* label = rows.add (new Label ({}, channels[ch]));
+                addAndMakeVisible (label);
+                auto* box = boxes.add (new ComboBox());
+                box->addItem ("Off", 1);
+                for (int i = 0; i < jmax (inputs.size(), channels.size()); ++i)
+                    box->addItem (String (i + 1) + (i < inputs.size() ? " - " + inputs[i] : String (" (not active)")), i + 2);
+                box->setSelectedId (owner.sourceFor (ch) + 2, dontSendNotification);
+                box->onChange = [this, ch, box] { owner.setSource (ch, box->getSelectedId() - 2); };
+                addAndMakeVisible (box);
+            }
+
+            for (auto* b : { &resetButton, &swapButton })
+                addAndMakeVisible (b);
+            resetButton.onClick = [this] { applyPreset ({}); };
+            swapButton.onClick  = [this] { applyPreset ({ 0, 1, 2, 3, 6, 7, 4, 5 }); };
+
+            setSize (460, 70 + channels.size() * 30 + 50);
+        }
+
+        void resized() override
+        {
+            auto r = getLocalBounds().reduced (14);
+            title.setBounds (r.removeFromTop (28));
+            for (int i = 0; i < rows.size(); ++i)
+            {
+                auto row = r.removeFromTop (30).reduced (0, 2);
+                rows[i]->setBounds (row.removeFromLeft (70));
+                boxes[i]->setBounds (row);
+            }
+            r.removeFromTop (12);
+            auto buttons = r.removeFromTop (28);
+            resetButton.setBounds (buttons.removeFromLeft (120));
+            buttons.removeFromLeft (10);
+            swapButton.setBounds (buttons.removeFromLeft (230));
+        }
+
+    private:
+        void applyPreset (std::vector<int> map)
+        {
+            for (int ch = 0; ch < boxes.size(); ++ch)
+            {
+                const int src = ch < (int) map.size() ? map[(size_t) ch] : ch;
+                owner.setSource (ch, src);
+                boxes[ch]->setSelectedId (src + 2, dontSendNotification);
+            }
+        }
+
+        MainComponent& owner;
+        Label title;
+        OwnedArray<Label> rows;
+        OwnedArray<ComboBox> boxes;
+        TextButton resetButton { "Reset (1:1)" }, swapButton { "Swap side/rear (Windows)" };
+    };
+
+    void showChannelRouting()
+    {
+        DialogWindow::LaunchOptions o;
+        o.content.setOwned (new RoutingComponent (*this));
+        o.dialogTitle = "Input channels";
+        o.dialogBackgroundColour = panel;
+        o.escapeKeyTriggersCloseButton = true;
+        o.useNativeTitleBar = true;
+        o.resizable = false;
+        o.launchAsync();
+    }
+
     void showAudioSettings()
     {
         auto* selector = new AudioDeviceSelectorComponent (deviceManager, 0, 16, 2, 16, false, false, true, false);
@@ -912,7 +1070,9 @@ private:
     Label statusLabel, detailLabel;
     Label pluginLabel { {}, "Plugin" }, portLabel { {}, "Bridgehead port" }, layoutLabel { {}, "Input" };
     ComboBox pluginBox, layoutBox;
-    ToggleButton swapButton;
+    TextButton channelsButton { "Channels..." };
+    Label routingLabel;
+    std::vector<int> inputMap; // device input channel for each plugin input channel, -1 = off
     TextButton browseButton { "Browse..." }, audioButton { "Audio settings..." };
     TextEditor portEditor;
     std::array<Label, 3> axisLabels;
