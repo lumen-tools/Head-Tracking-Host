@@ -68,3 +68,8 @@ pyinstaller --windowed --name "Head Tracking Smoother" --icon icon.icns app.py  
 ```
 
 Tests: `python -m unittest discover -s tests`
+
+## Authors
+
+- [lumen-tools](https://github.com/lumen-tools) – idea, design, testing with real hardware
+- Claude (Anthropic) – co-author of the code
