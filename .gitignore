@@ -1,0 +1,7 @@
+__pycache__/
+build/
+dist/
+out/
+*.spec
+icon.ico
+icon.icns
