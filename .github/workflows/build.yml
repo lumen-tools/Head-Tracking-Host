@@ -75,6 +75,10 @@ jobs:
         run: |
           TAG="v$(cat VERSION)"
           if gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            # Keep the same version until VERSION is changed: move the tag to the
+            # current commit and replace the files in the existing release.
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/$TAG" \
+              -f sha="${GITHUB_SHA}" -F force=true >/dev/null
             gh release upload "$TAG" artifacts/*/* --clobber --repo "${GITHUB_REPOSITORY}"
             exit 0
           fi
