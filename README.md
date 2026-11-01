@@ -29,7 +29,9 @@ installed together with Virtuoso).
 ## Setup
 
 1. **Close the renderer's standalone app** (e.g. Virtuoso standalone).
-2. **Bridgehead:** profile **DaVinci Resolve** (sends yaw/pitch/roll to port 8000), tracking rate 100 Hz.
+2. **Bridgehead:** profile **DaVinci Resolve**, tracking rate **25 Hz** (higher rates work too).
+   Despite its name, this profile simply sends the tracker's raw yaw/pitch/roll in one message
+   (`/ypr`) to port 8000 – exactly what Head Tracking Host needs.
 3. **Start Head Tracking Host** and choose the plugin from the **Plugin** list
    (or **Browse...** for a plugin in another folder). Next time it opens the last plugin automatically.
 4. **Audio settings...** – the same devices you use for the standalone app:
