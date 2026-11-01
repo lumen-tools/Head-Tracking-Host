@@ -114,6 +114,21 @@ def step_angles(current: list[float], target: list[float], t: float) -> list[flo
     return out
 
 
+# ---------- MIDI (Gig Performer -> Virtuoso knobs) ----------
+MIDI_RATE_HZ = 200.0  # knob changes are smoothed by the plugin itself; 200 Hz is plenty
+DEFAULT_RANGES = ((-180.0, 180.0), (-90.0, 90.0), (-90.0, 90.0))  # yaw, pitch, roll in degrees
+
+
+def angle_to_14bit(angle: float, low: float, high: float) -> int:
+    value = (angle - low) / (high - low)
+    return max(0, min(16383, int(round(value * 16383))))
+
+
+def pitch_bend(channel: int, value: int) -> list[int]:
+    """MIDI pitch bend (14 bit) on channel 0-15."""
+    return [0xE0 | (channel & 0x0F), value & 0x7F, (value >> 7) & 0x7F]
+
+
 class Channel:
     def __init__(self, values: list[float]):
         self.quat = len(values) == 4
@@ -132,6 +147,12 @@ class Engine:
         self.rate_hz = 1000.0  # one update per millisecond -> tiny steps per audio block
         self.bypass = False
         self.dest = ("127.0.0.1", 8001)
+        # Output mode: "osc" -> Virtuoso tracking input, "midi" -> Gig Performer knobs.
+        self.output_mode = "osc"
+        self.midi_send = None  # callable(list[int]) set by the app
+        self.invert = [False, False, False]  # yaw, pitch, roll
+        self.ranges = list(DEFAULT_RANGES)
+        self._last_midi: list[int | None] = [None, None, None]
         self.received = 0
         self.last_input = 0.0
         self.addresses: list[str] = []
@@ -235,8 +256,13 @@ class Engine:
                 with self._lock:
                     for msg in messages:
                         self._recorded.append((now - self._record_start, *describe_message(msg)))
+            midi = self.output_mode == "midi"
             for msg in messages:
                 parsed = parse_numbers(msg)
+                if midi:
+                    if parsed is not None:
+                        self._note_input(*parsed, passthrough=self.bypass)
+                    continue
                 if parsed is None or self.bypass:
                     self._send(msg)
                     if parsed is not None:
@@ -257,10 +283,34 @@ class Engine:
             ch.last_input = self.last_input = time.monotonic()
             self.received += 1
 
+    @property
+    def midi_has_angles(self) -> bool:
+        with self._lock:
+            return any(not ch.quat and len(ch.target) == 3 for ch in self._channels.values())
+
+    def _send_midi(self, angles: list[float]) -> None:
+        send = self.midi_send
+        if send is None:
+            return
+        for axis in range(3):
+            angle = -angles[axis] if self.invert[axis] else angles[axis]
+            low, high = self.ranges[axis]
+            value = angle_to_14bit(angle, low, high)
+            if value != self._last_midi[axis]:
+                self._last_midi[axis] = value
+                try:
+                    send(pitch_bend(axis, value))
+                except Exception:
+                    self._last_midi[axis] = None
+
+    def reset_midi_cache(self) -> None:
+        self._last_midi = [None, None, None]
+
     def _output_loop(self) -> None:
         last = next_tick = time.monotonic()
         while self._running:
-            period = 1.0 / max(self.rate_hz, 10.0)
+            midi = self.output_mode == "midi"
+            period = 1.0 / (MIDI_RATE_HZ if midi else max(self.rate_hz, 10.0))
             next_tick += period
             delay = next_tick - time.monotonic()
             if delay > 0:
@@ -269,17 +319,24 @@ class Engine:
                 next_tick = time.monotonic()
             now = time.monotonic()
             dt, last = now - last, now
-            if self.bypass:
+            if self.bypass and not midi:
                 continue
-            tau = max(self.smooth_ms, 0.0) / 1000.0
+            tau = 0.0 if self.bypass else max(self.smooth_ms, 0.0) / 1000.0
             t = 1.0 if tau == 0 else 1.0 - math.exp(-dt / tau)
             out = []
+            angles = None
             with self._lock:
                 for address, ch in self._channels.items():
                     if now - ch.last_input > self.INPUT_TIMEOUT:
                         continue
                     step = step_quat if ch.quat else step_angles
                     ch.current = step(ch.current, ch.target, t)
-                    out.append(build_message(address, ch.current))
+                    if midi:
+                        if angles is None and not ch.quat and len(ch.current) == 3:
+                            angles = list(ch.current)
+                    else:
+                        out.append(build_message(address, ch.current))
             for msg in out:
                 self._send(msg)
+            if angles is not None:
+                self._send_midi(angles)

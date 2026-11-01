@@ -13,12 +13,17 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 
-from smoother_core import Engine
+from smoother_core import DEFAULT_RANGES, Engine
 
 APP_NAME = "Head Tracking Smoother"
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
-DEFAULTS = {"in_port": 8000, "out_port": 8001, "smooth_ms": 40, "bypass": False}
+DEFAULTS = {
+    "in_port": 8000, "out_port": 8001, "smooth_ms": 40, "bypass": False,
+    "output_mode": "osc", "midi_port": "", "invert_yaw": False, "invert_pitch": False, "invert_roll": False,
+}
+MODE_LABELS = {"osc": "Virtuoso (OSC)", "midi": "Gig Performer (MIDI)"}
+MAC_VIRTUAL_PORT = "Head Tracking Smoother (virtual port)"
 SLIDER_MIN, SLIDER_MAX = 5, 150
 RECOMMENDED_MIN, RECOMMENDED_MAX = 20, 60
 PORT_APPLY_DELAY_MS = 700
@@ -92,6 +97,55 @@ def reveal_file(path: Path) -> None:
         pass
 
 
+class MidiOut:
+    """Thin wrapper around python-rtmidi; every failure is reported, never raised."""
+
+    def __init__(self):
+        self.error = ""
+        self.port_name = ""
+        try:
+            import rtmidi
+
+            self._out = rtmidi.MidiOut()
+        except Exception as exc:  # no MIDI system available
+            self._out = None
+            self.error = f"MIDI is not available: {exc}"
+
+    def ports(self) -> list[str]:
+        if self._out is None:
+            return []
+        names = list(self._out.get_ports())
+        return ([MAC_VIRTUAL_PORT] if IS_MAC else []) + names
+
+    def open(self, name: str) -> bool:
+        if self._out is None:
+            return False
+        self.close()
+        try:
+            if name == MAC_VIRTUAL_PORT:
+                self._out.open_virtual_port("Head Tracking Smoother")
+            else:
+                self._out.open_port(list(self._out.get_ports()).index(name))
+        except Exception as exc:
+            self.error = f"Could not open MIDI port: {exc}"
+            return False
+        self.port_name, self.error = name, ""
+        return True
+
+    def close(self):
+        if self._out is not None and self._out.is_port_open():
+            self._out.close_port()
+        self.port_name = ""
+
+    @property
+    def is_open(self) -> bool:
+        return self._out is not None and self._out.is_port_open()
+
+    def send(self, message: list[int]):
+        if self.is_open:
+            self._out.send_message(message)
+
+
 def parse_port(text: str) -> int | None:
     try:
         value = int(text.strip())
@@ -109,6 +163,9 @@ class App(ctk.CTk):
         self.engine = Engine()
         self.engine.smooth_ms = float(self.settings["smooth_ms"])
         self.engine.bypass = bool(self.settings["bypass"])
+        self.midi = MidiOut()
+        self.engine.midi_send = self.midi.send
+        self._apply_engine_midi_settings()
         self.tray_icon = None
         self._last_count = 0
         self._port_job = None
@@ -156,9 +213,8 @@ class App(ctk.CTk):
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill="x", padx=22, pady=(20, 14))
         ctk.CTkLabel(header, text=APP_NAME, font=ctk.CTkFont(size=24, weight="bold")).pack(anchor="w")
-        ctk.CTkLabel(
-            header, text="Bridgehead  →  Smoothing  →  APL Virtuoso", text_color=MUTED, font=ctk.CTkFont(size=13)
-        ).pack(anchor="w")
+        self.subtitle = ctk.CTkLabel(header, text="", text_color=MUTED, font=ctk.CTkFont(size=13))
+        self.subtitle.pack(anchor="w")
 
         # Status
         status = self._card("Status")
@@ -185,13 +241,57 @@ class App(ctk.CTk):
         )
         self.record_text.pack(side="left", padx=(10, 0))
 
+        # Output
+        output = self._card("Output")
+        self.mode_button = ctk.CTkSegmentedButton(
+            output, values=list(MODE_LABELS.values()), command=self._on_mode
+        )
+        self.mode_button.set(MODE_LABELS[self.settings["output_mode"]])
+        self.mode_button.pack(fill="x", padx=18, pady=(0, 10))
+        self.osc_info = ctk.CTkLabel(
+            output, text="Sends to Virtuoso's head tracking input (Virtuoso: OSC, profile APL).",
+            text_color=MUTED, font=ctk.CTkFont(size=12), anchor="w", justify="left", wraplength=380,
+        )
+        self.midi_frame = ctk.CTkFrame(output, fg_color="transparent")
+        port_row = ctk.CTkFrame(self.midi_frame, fg_color="transparent")
+        port_row.pack(fill="x")
+        ctk.CTkLabel(port_row, text="MIDI port", anchor="w").pack(side="left")
+        self.midi_menu = ctk.CTkOptionMenu(port_row, values=["—"], command=self._on_midi_port, width=230)
+        self.midi_menu.pack(side="left", padx=(10, 6), fill="x", expand=True)
+        ctk.CTkButton(port_row, text="↻", width=32, command=self._refresh_midi_ports).pack(side="right")
+        invert_row = ctk.CTkFrame(self.midi_frame, fg_color="transparent")
+        invert_row.pack(fill="x", pady=(10, 0))
+        ctk.CTkLabel(invert_row, text="Invert", anchor="w").pack(side="left", padx=(0, 10))
+        self.invert_boxes = {}
+        for axis in ("yaw", "pitch", "roll"):
+            box = ctk.CTkCheckBox(invert_row, text=axis.capitalize(), width=70, command=self._on_invert)
+            if self.settings[f"invert_{axis}"]:
+                box.select()
+            box.pack(side="left")
+            self.invert_boxes[axis] = box
+        (ylo, yhi), (plo, phi), (rlo, rhi) = DEFAULT_RANGES
+        self.midi_info = ctk.CTkLabel(
+            self.midi_frame,
+            text=f"Bridgehead profile: DaVinci Resolve (/ypr).\n"
+            f"Gig Performer: MIDI-learn the widgets for Virtuoso's knobs –\n"
+            f"Yaw = pitch bend ch 1, Pitch = ch 2, Roll = ch 3. Virtuoso: Manual.\n"
+            f"Ranges: yaw {ylo:+.0f}…{yhi:+.0f}°, pitch {plo:+.0f}…{phi:+.0f}°, roll {rlo:+.0f}…{rhi:+.0f}°.",
+            text_color=MUTED, font=ctk.CTkFont(size=12), anchor="w", justify="left", wraplength=380,
+        )
+        self.midi_info.pack(fill="x", pady=(10, 0))
+        self.midi_error = ctk.CTkLabel(
+            self.midi_frame, text="", text_color=RED, font=ctk.CTkFont(size=12), anchor="w", justify="left",
+            wraplength=380,
+        )  # only shown while there is an error
+
         # Ports
         ports = self._card("Ports")
         grid = ctk.CTkFrame(ports, fg_color="transparent")
         grid.pack(fill="x", padx=18)
         grid.columnconfigure(0, weight=1)
         ctk.CTkLabel(grid, text="Input  (Bridgehead sends to)", anchor="w").grid(row=0, column=0, sticky="w", pady=4)
-        ctk.CTkLabel(grid, text="Output  (port set in Virtuoso)", anchor="w").grid(row=1, column=0, sticky="w", pady=4)
+        self.out_label = ctk.CTkLabel(grid, text="Output  (port set in Virtuoso)", anchor="w")
+        self.out_label.grid(row=1, column=0, sticky="w", pady=4)
         self.in_port = ctk.CTkEntry(grid, width=96, justify="center")
         self.out_port = ctk.CTkEntry(grid, width=96, justify="center")
         self.in_port.grid(row=0, column=1, pady=4)
@@ -235,6 +335,8 @@ class App(ctk.CTk):
             self.bypass_switch.select()
         self.bypass_switch.pack(anchor="w", padx=18, pady=(10, 16))
         self._on_smooth(self.settings["smooth_ms"], save=False)
+        self._refresh_midi_ports()
+        self._show_mode()
 
         # Buttons
         buttons = ctk.CTkFrame(self, fg_color="transparent")
@@ -262,10 +364,81 @@ class App(ctk.CTk):
             self.port_hint.pack_configure(pady=(6, 14))
 
     def _update_port_hint(self):
-        self.port_hint.configure(
-            text=f"Bridgehead: leave unchanged (sends to {self.settings['in_port']}).\n"
-            f"Virtuoso: Head tracking → gear icon → Port {self.settings['out_port']}."
-        )
+        if self.settings["output_mode"] == "midi":
+            text = f"Bridgehead sends to port {self.settings['in_port']}."
+        else:
+            text = (f"Bridgehead: leave unchanged (sends to {self.settings['in_port']}).\n"
+                    f"Virtuoso: Head tracking → gear icon → Port {self.settings['out_port']}.")
+        self.port_hint.configure(text=text)
+
+    # ---------- Output mode ----------
+    def _apply_engine_midi_settings(self):
+        self.engine.output_mode = self.settings["output_mode"]
+        self.engine.invert = [self.settings[f"invert_{a}"] for a in ("yaw", "pitch", "roll")]
+        self.engine.reset_midi_cache()
+
+    def _show_mode(self):
+        midi = self.settings["output_mode"] == "midi"
+        target = "Gig Performer → Virtuoso knobs" if midi else "APL Virtuoso"
+        self.subtitle.configure(text=f"Bridgehead  →  Smoothing  →  {target}")
+        if midi:
+            self.osc_info.pack_forget()
+            self.midi_frame.pack(fill="x", padx=18, pady=(0, 14))
+            self.out_label.grid_remove()
+            self.out_port.grid_remove()
+        else:
+            self.midi_frame.pack_forget()
+            self.osc_info.pack(fill="x", padx=18, pady=(0, 14))
+            self.out_label.grid()
+            self.out_port.grid()
+        self._update_port_hint()
+
+    def _on_mode(self, label: str):
+        mode = next(k for k, v in MODE_LABELS.items() if v == label)
+        self.settings["output_mode"] = mode
+        save_settings(self.settings)
+        self._apply_engine_midi_settings()
+        self._show_mode()
+
+    def _refresh_midi_ports(self):
+        ports = self.midi.ports()
+        if not ports:
+            self.midi_menu.configure(values=["No MIDI port found"])
+            self.midi_menu.set("No MIDI port found")
+            self.midi.close()
+            hint = "Windows: install and start loopMIDI, create a port, then press ↻." if IS_WIN else ""
+            self._set_midi_error(self.midi.error or hint)
+            return
+        self.midi_menu.configure(values=ports)
+        wanted = self.settings["midi_port"]
+        if wanted not in ports:
+            wanted = next((p for p in ports if "loopmidi" in p.lower()), ports[0])
+        self.midi_menu.set(wanted)
+        self._on_midi_port(wanted)
+
+    def _on_midi_port(self, name: str):
+        if name == self.midi.port_name and self.midi.is_open:
+            return
+        if self.midi.open(name):
+            self.settings["midi_port"] = name
+            save_settings(self.settings)
+            self.engine.reset_midi_cache()
+            self._set_midi_error("")
+        else:
+            self._set_midi_error(self.midi.error)
+
+    def _set_midi_error(self, text: str):
+        self.midi_error.configure(text=text)
+        if text:
+            self.midi_error.pack(fill="x", pady=(6, 0))
+        else:
+            self.midi_error.pack_forget()
+
+    def _on_invert(self):
+        for axis, box in self.invert_boxes.items():
+            self.settings[f"invert_{axis}"] = bool(box.get())
+        save_settings(self.settings)
+        self._apply_engine_midi_settings()
 
     # ---------- Ports (applied automatically) ----------
     def _schedule_ports(self, _event=None):
@@ -299,10 +472,13 @@ class App(ctk.CTk):
             self.engine.start(self.settings["in_port"], self.settings["out_port"])
         except OSError:
             self._port_busy = True
-            self._set_port_error(
-                f"Port {self.settings['in_port']} is in use – probably Virtuoso is still listening on it. "
-                f"Set Virtuoso to port {self.settings['out_port']}; this app connects automatically."
-            )
+            if self.settings["output_mode"] == "midi":
+                msg = (f"Port {self.settings['in_port']} is in use by another program (e.g. Virtuoso standalone). "
+                       f"Close it; this app connects automatically.")
+            else:
+                msg = (f"Port {self.settings['in_port']} is in use – probably Virtuoso is still listening on it. "
+                       f"Set Virtuoso to port {self.settings['out_port']}; this app connects automatically.")
+            self._set_port_error(msg)
             return False
         self._port_busy = False
         self._set_port_error("")
@@ -382,7 +558,12 @@ class App(ctk.CTk):
         self._on_smooth(DEFAULTS["smooth_ms"])
         self.bypass_switch.deselect()
         self._on_bypass()
-        self._update_port_hint()
+        for box in self.invert_boxes.values():
+            box.deselect()
+        self.mode_button.set(MODE_LABELS["osc"])
+        self._apply_engine_midi_settings()
+        self._refresh_midi_ports()
+        self._show_mode()
         self._start_engine()
 
     # ---------- Status ----------
@@ -398,6 +579,16 @@ class App(ctk.CTk):
         if not self.engine.running:
             color, text = RED, "Stopped – input port in use"
             detail = f"Set Virtuoso to port {self.settings['out_port']}. Retrying automatically…"
+        elif self.engine.receiving and self.settings["output_mode"] == "midi":
+            detail = "Detected: " + ", ".join(self.engine.addresses) if self.engine.addresses else ""
+            if not self.engine.midi_has_angles:
+                color, text = AMBER, "Receiving – but no yaw/pitch/roll"
+                detail = "Set the Bridgehead profile to DaVinci Resolve (/ypr). " + detail
+            elif not self.midi.is_open:
+                color, text = AMBER, "Receiving – no MIDI port open"
+            else:
+                mode = "unsmoothed (A/B)" if self.engine.bypass else "smoothed"
+                color, text = GREEN, f"Receiving ({rate}/s) – {mode}, MIDI to Gig Performer"
         elif self.engine.receiving:
             mode = "unsmoothed (A/B)" if self.engine.bypass else f"smoothed, {int(self.engine.rate_hz)} Hz to Virtuoso"
             color, text = GREEN, f"Receiving ({rate}/s) – {mode}"
@@ -445,6 +636,7 @@ class App(ctk.CTk):
                 pass
             self.tray_icon = None
         self.engine.stop()
+        self.midi.close()
         self.destroy()
 
 

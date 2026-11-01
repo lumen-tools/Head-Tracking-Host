@@ -93,3 +93,36 @@ class EngineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MidiTests(unittest.TestCase):
+    def test_encoding(self):
+        self.assertEqual(m.angle_to_14bit(0, -180, 180), 8192)
+        self.assertEqual(m.angle_to_14bit(-180, -180, 180), 0)
+        self.assertEqual(m.angle_to_14bit(180, -180, 180), 16383)
+        self.assertEqual(m.angle_to_14bit(500, -180, 180), 16383)
+        self.assertEqual(m.pitch_bend(1, 8192), [0xE1, 0x00, 0x40])
+
+    def test_engine_sends_smoothed_pitch_bend(self):
+        sent = []
+        engine = m.Engine()
+        engine.output_mode = "midi"
+        engine.midi_send = sent.append
+        engine.invert = [False, True, False]
+        engine.start(0, 1)  # OSC output unused in MIDI mode
+        port = engine._rx.getsockname()[1]
+        tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        for i in range(25):
+            tx.sendto(m.build_message("/ypr", [90.0 * i / 24, 10.0, 0.0]), ("127.0.0.1", port))
+            time.sleep(0.04)
+        time.sleep(0.4)
+        engine.stop()
+        tx.close()
+        yaw = [msg for msg in sent if msg[0] == 0xE0]
+        pitch = [msg for msg in sent if msg[0] == 0xE1]
+        val = lambda msg: msg[1] | (msg[2] << 7)
+        self.assertGreater(len(yaw), 100)  # smoothed: many small steps, not 25
+        self.assertEqual(val(yaw[-1]), m.angle_to_14bit(90, -180, 180))
+        self.assertEqual(val(pitch[-1]), m.angle_to_14bit(-10, -90, 90))  # inverted
+        steps = [abs(val(b) - val(a)) for a, b in zip(yaw, yaw[1:])]
+        self.assertLess(max(steps), m.angle_to_14bit(1.0, -180, 180) - 8192)  # < 1 degree per message

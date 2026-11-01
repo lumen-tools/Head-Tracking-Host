@@ -42,7 +42,7 @@ jobs:
       - name: Build Windows EXE
         if: runner.os == 'Windows'
         run: |
-          pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --name "Head Tracking Smoother" --icon icon.ico app.py
+          pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --hidden-import rtmidi --name "Head Tracking Smoother" --icon icon.ico app.py
           mkdir out
           copy "dist\Head Tracking Smoother.exe" "out\HeadTrackingSmoother.exe"
         shell: cmd
@@ -50,7 +50,7 @@ jobs:
       - name: Build macOS app
         if: runner.os == 'macOS'
         run: |
-          pyinstaller --noconfirm --windowed --collect-all customtkinter --name "Head Tracking Smoother" --icon icon.icns \
+          pyinstaller --noconfirm --windowed --collect-all customtkinter --hidden-import rtmidi --name "Head Tracking Smoother" --icon icon.icns \
             --osx-bundle-identifier io.github.lumen-tools.head-tracking-smoother app.py
           mkdir out
           ditto -c -k --keepParent "dist/Head Tracking Smoother.app" "out/${{ matrix.artifact }}.zip"

@@ -32,6 +32,30 @@ The window follows the light/dark mode of Windows or macOS.
 Ports can be changed in Head Tracking Smoother and take effect automatically. All settings are saved.
 "Reset all settings" restores the defaults (8000 → 8001, 40 ms, bypass off).
 
+### Alternative: Gig Performer (MIDI) – drives Virtuoso's knobs
+
+Virtuoso's head tracking input crackles on fast head movements, while turning its
+Yaw/Pitch/Roll knobs does not. In this mode Head Tracking Smoother turns the knobs instead,
+via Gig Performer (works with Gig Performer Essentials):
+
+```
+Bridgehead → Head Tracking Smoother → virtual MIDI port → Gig Performer → Virtuoso knobs
+```
+
+1. **Virtual MIDI port:**
+   - Windows: install [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html), start it and create a port.
+   - Mac: nothing to install – choose "Head Tracking Smoother (virtual port)".
+2. **Bridgehead:** profile **DaVinci Resolve** (sends `/ypr` yaw/pitch/roll to port 8000).
+3. **Head Tracking Smoother:** Output → **Gig Performer (MIDI)**, choose the MIDI port.
+4. **Gig Performer:** load Virtuoso as a plugin, head tracking set to **Manual**.
+   Add three knob widgets, map them to Virtuoso's **Yaw**, **Pitch** and **Roll** parameters,
+   and MIDI-learn them from the virtual port while moving your head:
+   Yaw = pitch bend channel 1, Pitch = pitch bend channel 2, Roll = pitch bend channel 3.
+5. If an axis turns the wrong way, tick **Invert** for it.
+
+Pitch bend has 16,384 steps (about 0.02° for yaw), so there are no audible steps.
+Assumed knob ranges: yaw ±180°, pitch ±90°, roll ±90°.
+
 ### Adjusting the smoothing
 
 - **Recommended: 20–60 ms** (default 40 ms). Below 20 ms there is little smoothing;
