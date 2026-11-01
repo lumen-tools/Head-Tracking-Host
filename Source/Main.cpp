@@ -209,6 +209,11 @@ public:
         midi.ensureSize (256);
     }
 
+    // Watchdog support: the audio callback counts its calls; device errors are flagged.
+    uint32 getCallbackCount() const   { return callbackCount.load(); }
+    bool takeDeviceError()            { return deviceError.exchange (false); }
+    void audioDeviceError (const String&) override { deviceError = true; }
+
     void audioDeviceStopped() override
     {
         if (plugin != nullptr)
@@ -219,6 +224,7 @@ public:
                                            float* const* outputs, int numOutputs,
                                            int numSamples, const AudioIODeviceCallbackContext&) override
     {
+        callbackCount.fetch_add (1);
         auto* p = plugin;
         if (p == nullptr || muted || tripped || numSamples > buffer.getNumSamples())
         {
@@ -340,7 +346,8 @@ private:
     }
 
     AudioPluginInstance* plugin = nullptr;
-    std::atomic<bool> muted { false }, tripped { false }, bypass { false };
+    std::atomic<bool> muted { false }, tripped { false }, bypass { false }, deviceError { false };
+    std::atomic<uint32> callbackCount { 0 };
     std::array<std::pair<float, float>, maxChannels> downmix {};
     struct InputMap
     {
@@ -968,8 +975,49 @@ private:
 
     //==============================================================================
     // Status
+    // Reopens the audio device if its stream stopped (power saving, sample rate change by another
+    // app, device sleeping or briefly removed). Checked twice per second.
+    void audioWatchdog()
+    {
+        if (! audioInitialised)
+            return;
+
+        const auto now = Time::getMillisecondCounter();
+        const auto count = engine.getCallbackCount();
+        auto* device = deviceManager.getCurrentAudioDevice();
+
+        if (count != lastCallbackCount)
+        {
+            lastCallbackCount = count;
+            lastCallbackTime = now;
+            reconnecting = false;
+        }
+
+        const bool error = engine.takeDeviceError();
+        const bool stalled = device != nullptr && now - lastCallbackTime > 2000;
+        const bool lost = device == nullptr && settings->containsKey ("audioDevice");
+
+        if ((error || stalled || lost) && now - lastRestartAttempt > 3000)
+        {
+            lastRestartAttempt = now;
+            reconnecting = true;
+            deviceManager.closeAudioDevice();
+            deviceManager.restartLastAudioDevice();
+            if (deviceManager.getCurrentAudioDevice() == nullptr)
+            {
+                // Fall back to the saved device setup (e.g. after the device was unplugged).
+                std::unique_ptr<XmlElement> saved (settings->getXmlValue ("audioDevice"));
+                deviceManager.initialise (microphoneDenied ? 0 : 16, 16, saved.get(), true);
+            }
+            lastCallbackTime = now; // give the reopened device time to start
+            engine.resetTrip();     // fade in softly after reconnecting
+            checkFeedback();
+        }
+    }
+
     void timerCallback() override
     {
+        audioWatchdog();
         const auto now = Time::getMillisecondCounter();
         const int rate = (int) (angleMessages - lastCountedAngles) * 2;
         lastCountedAngles = angleMessages;
@@ -985,6 +1033,11 @@ private:
             c = lastError.isNotEmpty() ? red : amber;
             status = "Choose a plugin";
             detail = lastError.isNotEmpty() ? lastError : "Pick it from the list or click \"Browse...\".";
+        }
+        else if (reconnecting)
+        {
+            c = amber; status = "Reconnecting audio device...";
+            detail = "The audio stream stopped (e.g. power saving or a sample rate change). Retrying automatically.";
         }
         else if (microphoneDenied)
         {
@@ -1227,7 +1280,8 @@ private:
     Array<File> installedPlugins;
     std::array<AxisParam, 3> params;
     String activeLayout, lastError, lastAddress;
-    bool feedbackRisk = false, microphoneDenied = false, audioInitialised = false;
+    bool feedbackRisk = false, microphoneDenied = false, audioInitialised = false, reconnecting = false;
+    uint32 lastCallbackCount = 0, lastCallbackTime = 0, lastRestartAttempt = 0;
 
     OSCReceiver receiver;
     int currentPort = 0;

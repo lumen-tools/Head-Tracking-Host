@@ -68,6 +68,13 @@ before, set that matrix back to normal.)
 - If the output clips continuously for half a second (typical for feedback), the output is muted.
   Fix the output channels, then click **Audio settings...** to unmute with a fade-in.
 
+## Automatic reconnect
+
+If the audio stream stops – e.g. the audio device went to sleep after a pause, another program
+changed the sample rate, or the device was briefly disconnected – Head Tracking Host notices it
+within about two seconds and reopens the device automatically (status: "Reconnecting audio
+device..."), with a soft fade-in.
+
 ## First launch: security warnings
 
 The app is not commercially code-signed, so the system warns once:
