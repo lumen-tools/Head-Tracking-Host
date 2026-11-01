@@ -62,6 +62,7 @@ jobs:
       - name: Create or update release
         env:
           GH_TOKEN: ${{ github.token }}
+          BUILD_RESULT: ${{ needs.build.result }}
         run: |
           TAG="v$(cat VERSION)"
           if gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
@@ -70,7 +71,12 @@ jobs:
             gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/$TAG" \
               -f sha="${GITHUB_SHA}" -F force=true >/dev/null
             gh release upload "$TAG" artifacts/*/* --clobber --repo "${GITHUB_REPOSITORY}"
-            # Remove files from older builds that this build no longer produces.
+            # Remove files from older builds that this build no longer produces - but only if every
+            # build succeeded, so a failed platform keeps its previous download.
+            if [ "$BUILD_RESULT" != "success" ]; then
+              echo "Not all builds succeeded - keeping existing release files."
+              exit 0
+            fi
             CURRENT=$(for f in artifacts/*/*; do basename "$f"; done)
             RELEASE_ID=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$TAG" --jq .id)
             gh api "repos/${GITHUB_REPOSITORY}/releases/$RELEASE_ID/assets" --jq '.[] | "\(.id) \(.name)"' |

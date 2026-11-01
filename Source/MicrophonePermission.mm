@@ -13,24 +13,26 @@ void requestMicrophoneAccess (std::function<void (bool)> callback)
 {
     if (@available (macOS 10.14, *))
     {
-        switch ([AVCaptureDevice authorizationStatusForMediaType: AVMediaTypeAudio])
+        const auto status = [AVCaptureDevice authorizationStatusForMediaType: AVMediaTypeAudio];
+
+        if (status == AVAuthorizationStatusAuthorized)
         {
-            case AVAuthorizationStatusAuthorized:
-                callback (true);
-                return;
-
-            case AVAuthorizationStatusNotDetermined:
-                [AVCaptureDevice requestAccessForMediaType: AVMediaTypeAudio
-                                         completionHandler: ^(BOOL granted)
-                                         {
-                                             juce::MessageManager::callAsync ([callback, granted] { callback (granted); });
-                                         }];
-                return;
-
-            default: // denied or restricted
-                callback (false);
-                return;
+            callback (true);
+            return;
         }
+
+        if (status == AVAuthorizationStatusNotDetermined)
+        {
+            [AVCaptureDevice requestAccessForMediaType: AVMediaTypeAudio
+                                     completionHandler: ^(BOOL granted)
+                                     {
+                                         juce::MessageManager::callAsync ([callback, granted] { callback (granted); });
+                                     }];
+            return;
+        }
+
+        callback (false); // denied or restricted
+        return;
     }
     callback (true);
 }
