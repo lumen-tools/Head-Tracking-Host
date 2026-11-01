@@ -14,6 +14,10 @@
 
 using namespace juce;
 
+#if JUCE_MAC
+void requestMicrophoneAccess (std::function<void (bool)> callback); // MicrophonePermission.mm
+#endif
+
 namespace
 {
 constexpr int defaultOscPort = 9000; // Bridgehead profile "IEM Scene Rotator YPR"
@@ -455,14 +459,18 @@ public:
         addAndMakeVisible (viewport);
         viewport.setScrollBarsShown (true, true, true, true);
 
-        // Audio device (restores the last device, e.g. ASIO / FlexASIO or CoreAudio / BlackHole).
-        std::unique_ptr<XmlElement> savedAudio (settings->getXmlValue ("audioDevice"));
-        const auto audioError = deviceManager.initialise (16, 16, savedAudio.get(), true);
-        if (audioError.isNotEmpty())
-            lastError = "Audio device: " + audioError;
         deviceManager.addChangeListener (this);
         deviceManager.addAudioCallback (&engine);
-        checkFeedback();
+       #if JUCE_MAC
+        // Ask for audio input access once, then open the devices (avoids repeated dialogs).
+        requestMicrophoneAccess ([safe = Component::SafePointer<MainComponent> (this)] (bool granted)
+                                 {
+                                     if (safe != nullptr)
+                                         safe->initialiseAudio (granted);
+                                 });
+       #else
+        initialiseAudio (true);
+       #endif
 
         receiver.addListener (this);
         applyPort();
@@ -473,6 +481,18 @@ public:
             loadPlugin (lastPlugin);
 
         startTimerHz (2);
+    }
+
+    // Opens the last audio device (e.g. ASIO / FlexASIO or CoreAudio / aggregate device).
+    void initialiseAudio (bool inputAllowed)
+    {
+        microphoneDenied = ! inputAllowed;
+        std::unique_ptr<XmlElement> savedAudio (settings->getXmlValue ("audioDevice"));
+        const auto audioError = deviceManager.initialise (inputAllowed ? 16 : 0, 16, savedAudio.get(), true);
+        if (audioError.isNotEmpty())
+            lastError = "Audio device: " + audioError;
+        audioInitialised = true;
+        checkFeedback();
     }
 
     ~MainComponent() override
@@ -487,8 +507,11 @@ public:
 
     void saveState()
     {
-        if (auto xml = deviceManager.createStateXml())
-            settings->setValue ("audioDevice", xml.get());
+        // Only store the audio device once it has been opened (on the Mac that waits for the
+        // microphone permission), so an early quit doesn't overwrite the saved device.
+        if (audioInitialised)
+            if (auto xml = deviceManager.createStateXml())
+                settings->setValue ("audioDevice", xml.get());
         if (plugin != nullptr)
         {
             MemoryBlock state;
@@ -963,6 +986,11 @@ private:
             status = "Choose a plugin";
             detail = lastError.isNotEmpty() ? lastError : "Pick it from the list or click \"Browse...\".";
         }
+        else if (microphoneDenied)
+        {
+            c = red; status = "No access to audio input";
+            detail = "Allow it in System Settings > Privacy & Security > Microphone > Head Tracking Host, then restart.";
+        }
         else if (deviceManager.getCurrentAudioDevice() == nullptr)
         {
             c = red; status = "No audio device"; detail = "Click \"Audio settings...\" and choose your input and output.";
@@ -1199,7 +1227,7 @@ private:
     Array<File> installedPlugins;
     std::array<AxisParam, 3> params;
     String activeLayout, lastError, lastAddress;
-    bool feedbackRisk = false;
+    bool feedbackRisk = false, microphoneDenied = false, audioInitialised = false;
 
     OSCReceiver receiver;
     int currentPort = 0;

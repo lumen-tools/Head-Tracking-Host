@@ -29,6 +29,10 @@ juce_add_gui_app(HeadTrackingHost
     MICROPHONE_PERMISSION_TEXT "Head Tracking Host needs audio input to process the sound coming from your virtual audio device.")
 
 target_sources(HeadTrackingHost PRIVATE Source/Main.cpp)
+if(APPLE)
+    target_sources(HeadTrackingHost PRIVATE Source/MicrophonePermission.mm)
+    target_link_libraries(HeadTrackingHost PRIVATE "-framework AVFoundation")
+endif()
 
 target_compile_definitions(HeadTrackingHost PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:HeadTrackingHost,JUCE_PRODUCT_NAME>"

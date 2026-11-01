@@ -36,8 +36,14 @@ jobs:
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release --parallel 4
+          APP="build/HeadTrackingHost_artefacts/Release/Head Tracking Host.app"
+          # Sign the whole bundle (ad-hoc) so macOS can remember the microphone permission.
+          codesign --force --deep --sign - --identifier io.github.lumen-tools.head-tracking-host "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -d --requirements - "$APP"
+          plutil -p "$APP/Contents/Info.plist" | grep -i -E "NSMicrophoneUsageDescription|CFBundleIdentifier"
           mkdir -p out
-          ditto -c -k --keepParent "build/HeadTrackingHost_artefacts/Release/Head Tracking Host.app" "out/${{ matrix.artifact }}.zip"
+          ditto -c -k --keepParent "$APP" "out/${{ matrix.artifact }}.zip"
 
       - uses: actions/upload-artifact@v4
         with:
