@@ -427,6 +427,12 @@ public:
         routingLabel.setColour (Label::textColourId, Colours::lightgrey);
         loadInputMap();
 
+        addAndMakeVisible (trackingButton);
+        trackingButton.setButtonText ("Head tracking");
+        trackingButton.setTooltip ("Off: stops listening to Bridgehead, frees the port and sets Yaw/Pitch/Roll to 0 degrees.");
+        trackingButton.setToggleState (settings->getBoolValue ("headTracking", true), dontSendNotification);
+        trackingButton.onClick = [this] { setHeadTracking (trackingButton.getToggleState()); };
+
         // Row 3: which plugin parameter is yaw / pitch / roll
         for (size_t i = 0; i < 3; ++i)
         {
@@ -565,6 +571,7 @@ public:
         row4.removeFromLeft (10);
         channelsButton.setBounds (row4.removeFromLeft (110));
         row4.removeFromLeft (10);
+        trackingButton.setBounds (row4.removeFromRight (140));
         routingLabel.setBounds (row4);
 
         viewport.setBounds (area);
@@ -892,12 +899,28 @@ private:
     {
         const int port = jlimit (1, 65535, portEditor.getText().getIntValue());
         portEditor.setText (String (port), dontSendNotification);
+        settings->setValue ("oscPort", port);
+        if (! trackingButton.getToggleState())
+        {
+            receiver.disconnect();   // head tracking off: don't occupy the port
+            oscConnected = false;
+            currentPort = port;
+            return;
+        }
         if (port == currentPort && oscConnected)
             return;
         receiver.disconnect();
         currentPort = port;
         oscConnected = receiver.connect (port);
-        settings->setValue ("oscPort", port);
+    }
+
+    void setHeadTracking (bool on)
+    {
+        settings->setValue ("headTracking", on);
+        applyPort();
+        if (! on)
+            for (size_t i = 0; i < 3; ++i)
+                applyAxisDegrees (i, 0.0f);   // look straight ahead
     }
 
     static bool numberAt (const OSCMessage& m, int index, float& out)
@@ -915,6 +938,8 @@ private:
         const auto address = m.getAddressPattern().toString();
         lastAddress = address;
 
+        if (! trackingButton.getToggleState())
+            return;
         float value = 0.0f;
         if (m.size() != 1 || ! numberAt (m, 0, value))
             return;
@@ -940,11 +965,16 @@ private:
 
     void applyAxis (size_t i, float rawDegrees)
     {
+        applyAxisDegrees (i, invertButtons[i].getToggleState() ? -rawDegrees : rawDegrees);
+    }
+
+    void applyAxisDegrees (size_t i, float degrees)
+    {
         {
             auto& a = params[i];
             if (a.param == nullptr)
                 return;
-            float d = invertButtons[i].getToggleState() ? -rawDegrees : rawDegrees;
+            float d = degrees;
             const float span = a.high - a.low;
             if (std::abs (span) >= 359.0f)
             {
@@ -1084,6 +1114,11 @@ private:
         {
             c = red; status = "Output muted: input and output are the same loopback device";
             detail = "In \"Audio settings...\" choose your headphones or interface as output.";
+        }
+        else if (! trackingButton.getToggleState())
+        {
+            status = "Head tracking off";
+            detail = "The plugin's knobs can be turned by hand.  Input: " + activeLayout;
         }
         else if (! oscConnected)
         {
@@ -1321,6 +1356,7 @@ private:
     ComboBox pluginBox, layoutBox;
     TextButton channelsButton { "Channels..." }, bypassButton { "Bypass (dry)" };
     Label routingLabel;
+    ToggleButton trackingButton;
     std::vector<int> inputMap; // device input channel for each plugin input channel, -1 = off
     TextButton browseButton { "Browse..." }, audioButton { "Audio settings..." };
     TextEditor portEditor;

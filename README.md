@@ -50,6 +50,9 @@ all settings stay.
 8. If an axis turns the wrong way, tick **Invert** for it. By default nothing is inverted – the
    normal orientation is the one used by IEM Scene Rotator and Virtuoso.
 
+**Without head tracking:** untick **Head tracking**. The app stops listening to Bridgehead,
+frees the port, sets Yaw/Pitch/Roll to 0° and leaves the plugin's knobs to you.
+
 **A/B comparison:** **Bypass (dry)** plays the input without the plugin. Stereo passes through
 unchanged; surround is downmixed to stereo (centre and surrounds at −3 dB, LFE left out, a bit
 quieter overall so it does not clip).
