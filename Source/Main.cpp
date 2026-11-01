@@ -18,7 +18,7 @@ namespace
 {
 constexpr int defaultOscPort = 8000;
 constexpr int minWidth = 900;
-constexpr int barHeight = 156;
+constexpr int barHeight = 190;
 const std::array<const char*, 3> axisNames { "Yaw", "Pitch", "Roll" };
 const std::array<float, 3> fallbackRange { 180.0f, 90.0f, 90.0f }; // +/- degrees if the plugin text can't be parsed
 const std::array<bool, 3> defaultInvert { false, true, false };     // matches Bridgehead "DaVinci Resolve" -> Virtuoso
@@ -139,6 +139,7 @@ class HostEngine : public AudioIODeviceCallback
 public:
     void setPlugin (AudioPluginInstance* p) { plugin = p; }
     void setMuted (bool m) { muted = m; }
+    void setSwapSurrounds (bool s) { swapSurrounds = s; }
     bool wasTripped() const { return tripped; }
     void resetTrip() { loudSamples = 0; fadePosition = 0; tripped = false; }
 
@@ -197,8 +198,13 @@ public:
 
         for (int ch = 0; ch < channels; ++ch)
         {
-            if (ch < numInputs && ch < pluginIns && inputs[ch] != nullptr)
-                FloatVectorOperations::copy (block.getWritePointer (ch), inputs[ch], numSamples);
+            // Optional fix for the common Windows 7.1 order: side (4/5) <-> rear (6/7) surrounds.
+            int src = ch;
+            if (swapSurrounds && numInputs >= 8 && pluginIns >= 8 && ch >= 4 && ch <= 7)
+                src = ch < 6 ? ch + 2 : ch - 2;
+
+            if (src < numInputs && ch < pluginIns && inputs[src] != nullptr)
+                FloatVectorOperations::copy (block.getWritePointer (ch), inputs[src], numSamples);
             else
                 block.clear (ch, 0, numSamples);
         }
@@ -273,7 +279,7 @@ private:
     }
 
     AudioPluginInstance* plugin = nullptr;
-    std::atomic<bool> muted { false }, tripped { false };
+    std::atomic<bool> muted { false }, tripped { false }, swapSurrounds { false };
     int loudSamples = 0, tripSamples = 24000;
     AudioBuffer<float> buffer;
     MidiBuffer midi;
@@ -327,6 +333,17 @@ public:
         layoutBox.setSelectedItemIndex (jlimit (0, layoutBox.getNumItems() - 1, settings->getIntValue ("layout", 0)),
                                         dontSendNotification);
         layoutBox.onChange = [this] { settings->setValue ("layout", layoutBox.getSelectedItemIndex()); applyLayout(); };
+
+        addAndMakeVisible (swapButton);
+        swapButton.setButtonText ("Swap side/rear surrounds (Lss <-> Lrs, Rss <-> Rrs)");
+        swapButton.setTooltip ("Fixes sources whose 7.1 side and rear surround channels arrive swapped (common on Windows).");
+        swapButton.setToggleState (settings->getBoolValue ("swapSurrounds", false), dontSendNotification);
+        engine.setSwapSurrounds (swapButton.getToggleState());
+        swapButton.onClick = [this]
+        {
+            engine.setSwapSurrounds (swapButton.getToggleState());
+            settings->setValue ("swapSurrounds", swapButton.getToggleState());
+        };
 
         // Row 3: which plugin parameter is yaw / pitch / roll
         for (size_t i = 0; i < 3; ++i)
@@ -433,6 +450,9 @@ public:
             invertButtons[i].setBounds (c.removeFromRight (72));
             axisBoxes[i].setBounds (c.withTrimmedRight (6));
         }
+
+        bar.removeFromTop (8);
+        swapButton.setBounds (bar.removeFromTop (24).withWidth (420));
 
         viewport.setBounds (area);
     }
@@ -892,6 +912,7 @@ private:
     Label statusLabel, detailLabel;
     Label pluginLabel { {}, "Plugin" }, portLabel { {}, "Bridgehead port" }, layoutLabel { {}, "Input" };
     ComboBox pluginBox, layoutBox;
+    ToggleButton swapButton;
     TextButton browseButton { "Browse..." }, audioButton { "Audio settings..." };
     TextEditor portEditor;
     std::array<Label, 3> axisLabels;
