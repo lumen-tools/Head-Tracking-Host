@@ -27,11 +27,16 @@ All builds are portable – no installation needed.
 2. **Virtuoso:** Head tracking → *OSC* → gear icon → profile *APL*, set **port to 8001**.
 3. Start **Head Tracking Smoother**. The dot turns green and shows "Receiving".
 
-Ports can be changed in Head Tracking Smoother ("Apply"). Settings are saved.
+The window follows the light/dark mode of Windows or macOS.
+
+Ports can be changed in Head Tracking Smoother and take effect automatically. All settings are saved.
+"Reset all settings" restores the defaults (8000 → 8001, 40 ms, bypass off).
 
 ### Adjusting the smoothing
 
-- Slider to the left: more direct; to the right: smoother. Default: 40 ms.
+- **Recommended: 20–60 ms** (default 40 ms). Below 20 ms there is little smoothing;
+  above 60 ms the added delay becomes noticeable.
+- Slider to the left: more direct; to the right: smoother.
 - "Bypass smoothing" forwards the data unsmoothed, for a direct A/B comparison.
 
 ### Running in the background
@@ -51,8 +56,8 @@ The app is not commercially code-signed, so the system warns once:
 
 ## Troubleshooting
 
-- **"Port 8000 is already in use":** Virtuoso is still listening on 8000 → set Virtuoso to 8001,
-  then click "Apply" in Head Tracking Smoother. Or Head Tracking Smoother is already running.
+- **"Port 8000 is in use":** Virtuoso is still listening on 8000 → set Virtuoso to 8001.
+  Head Tracking Smoother connects automatically. Or Head Tracking Smoother is already running.
 - **Yellow "waiting for Bridgehead":** Bridgehead is not running, the tracker is not connected,
   or Bridgehead sends to a port other than "Input".
 - Crashes are logged to `%APPDATA%\Head Tracking Smoother\crash.log` (Windows) or
