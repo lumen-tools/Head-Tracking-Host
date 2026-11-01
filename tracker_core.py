@@ -82,6 +82,7 @@ class Engine:
         self.midi_send = None  # callable(list[int]) set by the app
         self.invert = [False, False, False]  # yaw, pitch, roll
         self.ranges = list(DEFAULT_RANGES)
+        self.paused = False  # True while the MIDI Learn helper is sending a single axis
         self.received = 0
         self.last_input = 0.0
         self.last_angles_time = 0.0
@@ -160,7 +161,7 @@ class Engine:
 
     def send_angles(self, angles: list[float]) -> None:
         send = self.midi_send
-        if send is None:
+        if send is None or self.paused:
             return
         for axis in range(3):
             angle = -angles[axis] if self.invert[axis] else angles[axis]

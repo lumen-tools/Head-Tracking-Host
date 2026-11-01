@@ -26,25 +26,64 @@ All builds are portable – no installation needed.
 
 ## Setup
 
-1. **Virtual MIDI port**
-   - Windows: install [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html), start it and create a port (click **+**).
-   - Mac: nothing to install – choose **"Head Tracking Bridge (virtual port)"** in the app.
-2. **Bridgehead:** profile **DaVinci Resolve** (sends `/ypr` yaw/pitch/roll to port 8000).
-   Close Virtuoso standalone if it is still listening on port 8000.
-3. **Head Tracking Bridge:** start it and choose the MIDI port. The dot turns green and shows
-   "sending MIDI to Gig Performer".
-4. **Gig Performer:**
-   - Load **APL Virtuoso** as a plugin and set its head tracking to **Manual**.
-   - Add three knob widgets and map them to Virtuoso's **Yaw**, **Pitch** and **Roll** parameters.
-   - MIDI-learn each widget from the virtual MIDI port:
-     Yaw = **pitch bend channel 1**, Pitch = **pitch bend channel 2**, Roll = **pitch bend channel 3**.
-     Tip: move only the matching axis of your head while learning.
-5. If an axis turns the wrong way, tick **Invert** for it in the app.
+Do steps 1 and 4 once. After that you only start Bridgehead, loopMIDI (Windows),
+Head Tracking Bridge and Gig Performer.
 
-Pitch bend has 16,384 steps (about 0.02° for yaw), so there are no audible steps.
-Assumed knob ranges: yaw ±180°, pitch ±90°, roll ±90°.
+### 1. Virtual MIDI port (once)
 
-Settings are saved automatically. **Reset all settings** restores the defaults.
+- **Windows:** download and install [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html).
+  Start it and click **+**. A port called **loopMIDI Port** appears. Leave loopMIDI running.
+- **Mac:** nothing to install.
+
+### 2. Bridgehead
+
+- **Profile:** choose **DaVinci Resolve** (it sends yaw/pitch/roll to port 8000).
+- **Tracking rate:** 100 Hz.
+- Close **Virtuoso standalone** – Virtuoso now runs inside Gig Performer.
+
+### 3. Head Tracking Bridge
+
+- Start the app.
+- **MIDI port:** choose **loopMIDI Port** (Mac: **Head Tracking Bridge (virtual port)**).
+  The tracker's own port ("Head Tracker") and the Windows synth are hidden on purpose.
+- The dot turns green: "Receiving – sending MIDI to Gig Performer".
+
+### 4. Gig Performer (once)
+
+**a) Allow the MIDI port**
+Open **Options → MIDI Ports** and enable **loopMIDI Port** (Mac: **Head Tracking Bridge**) as an input.
+
+**b) Add Virtuoso**
+1. Switch to the **Wiring** view.
+2. Right-click an empty spot and choose **APL Virtuoso** from the plugin list.
+3. Connect **Audio Input → Virtuoso → Audio Output**.
+4. Double-click Virtuoso to open it and set **Head tracking** to **Manual**.
+
+**c) Add three knobs**
+1. Switch to the **Panels** view and turn on **Edit mode**.
+2. Drag three **knobs** from the widget list onto the panel.
+
+**d) Connect each knob – example Yaw**
+1. Select the first knob. On the right, the **widget properties** open.
+2. In **Mapping**, choose plugin **APL Virtuoso** and parameter **Yaw**.
+3. Click **MIDI Learn** in the widget properties.
+4. In Head Tracking Bridge, click **MIDI Learn → Yaw**. Only the yaw knob moves for a few
+   seconds, so Gig Performer learns exactly this one.
+5. The knob in Gig Performer starts moving – done.
+
+Repeat with the second knob for **Pitch** and the third for **Roll**.
+Then turn **Edit mode** off and save the gig.
+
+### 5. Check
+
+Turn your head to the left: Virtuoso's **Yaw** knob must follow. Nod and tilt to check Pitch and
+Roll. If an axis turns the wrong way, tick **Invert** for it in Head Tracking Bridge.
+
+Details: Yaw = pitch bend channel 1, Pitch = channel 2, Roll = channel 3. Pitch bend has
+16,384 steps (about 0.02° for yaw), so there are no audible steps. Assumed knob ranges:
+yaw ±180°, pitch ±90°, roll ±90°.
+
+Settings are saved automatically. **Reset** restores the defaults. **Setup guide** opens this page.
 
 ### Running in the background
 
@@ -66,7 +105,7 @@ The app is not commercially code-signed, so the system warns once:
 - **Red "port in use":** another program listens on the input port (e.g. Virtuoso standalone with
   OSC head tracking). Close it – the app connects automatically.
 - **Yellow "no yaw/pitch/roll":** Bridgehead uses a quaternion profile → choose **DaVinci Resolve**.
-- **"No MIDI port found" (Windows):** start loopMIDI, create a port, press ↻.
+- **"No MIDI port found" / "Choose a MIDI port" (Windows):** start loopMIDI, click **+**, press ↻.
 - Crashes are logged to `%APPDATA%\Head Tracking Bridge\crash.log` (Windows) or
   `~/Library/Application Support/Head Tracking Bridge/crash.log` (Mac).
 

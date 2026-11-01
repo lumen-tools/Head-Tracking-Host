@@ -3,16 +3,18 @@ via MIDI and Gig Performer (Windows & macOS)."""
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import tempfile
 import time
+import webbrowser
 from pathlib import Path
 from tkinter import messagebox
 
 import customtkinter as ctk
 
-from tracker_core import DEFAULT_RANGES, Engine
+from tracker_core import DEFAULT_RANGES, Engine, angle_to_14bit, pitch_bend
 
 APP_NAME = "Head Tracking Bridge"
 IS_MAC = sys.platform == "darwin"
@@ -20,6 +22,12 @@ IS_WIN = sys.platform == "win32"
 DEFAULTS = {"in_port": 8000, "midi_port": "", "invert_yaw": False, "invert_pitch": False, "invert_roll": False}
 AXES = ("yaw", "pitch", "roll")
 MAC_VIRTUAL_PORT = "Head Tracking Bridge (virtual port)"
+SETUP_GUIDE_URL = "https://github.com/lumen-tools/Head-Tracking-Smoother#setup"
+# Never offer these: the Supperware tracker's own port and the built-in Windows synth.
+HIDDEN_PORT_WORDS = ("head tracker", "wavetable")
+VIRTUAL_PORT_WORDS = ("loopmidi", "iac", "virtual", "head tracking bridge")
+LEARN_SECONDS = 6
+LEARN_WIGGLE_DEGREES = 20.0
 PORT_APPLY_DELAY_MS = 700
 BUSY_RETRY_SECONDS = 2.0
 
@@ -98,7 +106,8 @@ class MidiOut:
     def ports(self) -> list[str]:
         if self._out is None:
             return []
-        return ([MAC_VIRTUAL_PORT] if IS_MAC else []) + list(self._out.get_ports())
+        names = [n for n in self._out.get_ports() if not any(w in n.lower() for w in HIDDEN_PORT_WORDS)]
+        return ([MAC_VIRTUAL_PORT] if IS_MAC else []) + names
 
     def open(self, name: str) -> bool:
         if self._out is None:
@@ -244,22 +253,30 @@ class App(ctk.CTk):
                 box.select()
             box.pack(side="left")
             self.invert_boxes[axis] = box
-        (ylo, yhi), (plo, phi), (rlo, rhi) = DEFAULT_RANGES
-        self._small(
-            out,
-            "Gig Performer: MIDI-learn the widgets mapped to Virtuoso's knobs –\n"
-            "Yaw = pitch bend ch 1, Pitch = ch 2, Roll = ch 3. Virtuoso: Manual.\n"
-            f"Ranges: yaw {ylo:+.0f}…{yhi:+.0f}°, pitch {plo:+.0f}…{phi:+.0f}°, roll {rlo:+.0f}…{rhi:+.0f}°.",
-        ).pack(fill="x", padx=18, pady=(10, 14))
+        learn_row = ctk.CTkFrame(out, fg_color="transparent")
+        learn_row.pack(fill="x", padx=18, pady=(12, 0))
+        ctk.CTkLabel(learn_row, text="MIDI Learn", anchor="w").pack(side="left", padx=(0, 10))
+        self.learn_buttons = {}
+        for index, axis in enumerate(AXES):
+            button = ctk.CTkButton(learn_row, text=axis.capitalize(), width=74,
+                                   command=lambda i=index: self._start_learn(i))
+            button.pack(side="left", padx=(0, 6))
+            self.learn_buttons[index] = button
+        self.learn_text = self._small(
+            out, "Click while Gig Performer is learning: only that knob moves for a few seconds."
+        )
+        self.learn_text.pack(fill="x", padx=18, pady=(6, 14))
 
         # Buttons
         buttons = ctk.CTkFrame(self, fg_color="transparent")
         buttons.pack(fill="x", padx=20, pady=(2, 20))
         secondary = {"fg_color": "transparent", "border_width": 1, "text_color": ("gray10", "gray90"),
                      "border_color": ("gray60", "gray40"), "hover_color": ("gray85", "gray25")}
-        ctk.CTkButton(buttons, text="Reset all settings", command=self._reset, **secondary).pack(
+        ctk.CTkButton(buttons, text="Reset", width=70, command=self._reset, **secondary).pack(
             side="left", padx=(0, 6)
         )
+        ctk.CTkButton(buttons, text="Setup guide", width=100, command=lambda: webbrowser.open(SETUP_GUIDE_URL),
+                      **secondary).pack(side="left", padx=(0, 6))
         ctk.CTkButton(buttons, text="Quit", width=80, command=self._quit, **secondary).pack(side="right")
         hide_text = "Hide window" if IS_MAC else "Minimize to tray"
         ctk.CTkButton(buttons, text=hide_text, command=self.withdraw if IS_MAC else self._to_tray).pack(
@@ -326,13 +343,21 @@ class App(ctk.CTk):
             self.midi_menu.configure(values=["No MIDI port found"])
             self.midi_menu.set("No MIDI port found")
             self.midi.close()
+            self.midi.close()
             hint = "Install and start loopMIDI, create a port, then press ↻." if IS_WIN else ""
             self._set_midi_error(self.midi.error or hint)
             return
         self.midi_menu.configure(values=ports)
         wanted = self.settings["midi_port"]
         if wanted not in ports:
-            wanted = next((p for p in ports if "loopmidi" in p.lower()), ports[0])
+            # Only pick a port automatically if it is clearly a virtual MIDI port.
+            wanted = next((p for p in ports if any(w in p.lower() for w in VIRTUAL_PORT_WORDS)), None)
+        if wanted is None:
+            self.midi.close()
+            self.midi_menu.set("Choose a MIDI port")
+            hint = "No loopMIDI port found. Start loopMIDI, create a port, then press ↻." if IS_WIN else ""
+            self._set_midi_error(hint)
+            return
         self.midi_menu.set(wanted)
         self._on_midi_port(wanted)
 
@@ -346,6 +371,42 @@ class App(ctk.CTk):
             self._set_midi_error("")
         else:
             self._set_midi_error(self.midi.error)
+
+    # ---------- MIDI Learn helper ----------
+    def _start_learn(self, axis: int):
+        if not self.midi.is_open:
+            self._set_midi_error("Choose a MIDI port first.")
+            return
+        self.engine.paused = True
+        self._learn_axis = axis
+        self._learn_until = time.monotonic() + LEARN_SECONDS
+        for button in self.learn_buttons.values():
+            button.configure(state="disabled")
+        self._learn_tick()
+
+    def _learn_tick(self):
+        remaining = self._learn_until - time.monotonic()
+        axis = self._learn_axis
+        if remaining <= 0:
+            low, high = DEFAULT_RANGES[axis]
+            self.midi.send(pitch_bend(axis, angle_to_14bit(0.0, low, high)))  # back to centre
+            self.engine.paused = False
+            self.engine.reset_midi_cache()
+            for button in self.learn_buttons.values():
+                button.configure(state="normal")
+            self.learn_text.configure(
+                text="Click while Gig Performer is learning: only that knob moves for a few seconds.",
+                text_color=MUTED,
+            )
+            return
+        angle = LEARN_WIGGLE_DEGREES * math.sin(2 * math.pi * 0.5 * time.monotonic())
+        low, high = DEFAULT_RANGES[axis]
+        self.midi.send(pitch_bend(axis, angle_to_14bit(angle, low, high)))
+        self.learn_text.configure(
+            text=f"Sending {AXES[axis].capitalize()} only (pitch bend ch {axis + 1})… {int(remaining) + 1} s",
+            text_color=AMBER,
+        )
+        self.after(20, self._learn_tick)
 
     def _apply_invert(self):
         self.engine.invert = [self.settings[f"invert_{a}"] for a in AXES]
