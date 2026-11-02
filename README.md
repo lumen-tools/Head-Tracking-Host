@@ -53,6 +53,17 @@ all settings stay.
 **Without head tracking:** untick **Head tracking**. The app stops listening to Bridgehead,
 frees the port, sets Yaw/Pitch/Roll to 0° and leaves the plugin's knobs to you.
 
+**AutoEQ (headphone correction):** for plugins without their own headphone correction.
+1. Click **Find headphones...**, search your model (e.g. "ATH-M50x") and pick a measurement.
+   The list comes from the [AutoEq](https://github.com/jaakkopasanen/AutoEq) database (internet
+   needed only for searching; the list is cached).
+2. Click **Save to slot 1/2/3**. Up to three profiles are stored for offline use.
+3. Choose the slot in the dropdown and tick **AutoEQ**.
+
+AutoEQ also applies in **Bypass (dry)**, so A/B compares only the plugin. Don't combine it with a
+plugin's own headphone correction (e.g. Virtuoso's HPC EQ), otherwise the headphones are corrected
+twice. The profiles use AutoEq's Harman target.
+
 **A/B comparison:** **Bypass (dry)** plays the input without the plugin. Stereo passes through
 unchanged; surround is downmixed to stereo (centre and surrounds at −3 dB, LFE left out, a bit
 quieter overall so it does not clip).

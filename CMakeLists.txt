@@ -29,6 +29,9 @@ juce_add_gui_app(HeadTrackingHost
     MICROPHONE_PERMISSION_TEXT "Head Tracking Host needs audio input to process the sound coming from your virtual audio device.")
 
 target_sources(HeadTrackingHost PRIVATE Source/Main.cpp)
+if(UNIX AND NOT APPLE)
+    target_link_libraries(HeadTrackingHost PRIVATE curl) # Linux test builds: downloads via libcurl
+endif()
 if(APPLE)
     target_sources(HeadTrackingHost PRIVATE Source/MicrophonePermission.mm)
     target_link_libraries(HeadTrackingHost PRIVATE "-framework AVFoundation")
@@ -43,7 +46,7 @@ target_compile_definitions(HeadTrackingHost PRIVATE
     JUCE_WASAPI=1
     JUCE_DIRECTSOUND=1
     JUCE_WEB_BROWSER=0
-    JUCE_USE_CURL=0
+    JUCE_USE_CURL=$<IF:$<PLATFORM_ID:Linux>,1,0>
     JUCE_DISPLAY_SPLASH_SCREEN=0)
 
 target_link_libraries(HeadTrackingHost
