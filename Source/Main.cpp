@@ -11,6 +11,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <complex>
 
 using namespace juce;
 
@@ -211,6 +212,8 @@ class HeadphoneEq
 public:
     static constexpr int maxBands = 24;
 
+    bool isActive() const { return enabled; }
+
     // Called from the message thread.
     void setProfile (const EqProfile& p, bool enable)
     {
@@ -303,6 +306,95 @@ private:
     std::array<std::array<State, maxBands>, 2> state {};
 };
 
+// Magnitude response of a profile's bands in dB (preamp excluded), for drawing the curve.
+double eqResponseDb (const EqProfile& profile, double freq, double fs = 48000.0)
+{
+    double totalDb = 0.0;
+    const std::complex<double> z1 = std::polar (1.0, -MathConstants<double>::twoPi * freq / fs);
+    const auto z2 = z1 * z1;
+    for (const auto& band : profile.bands)
+    {
+        const double A = std::pow (10.0, band.gainDb / 40.0);
+        const double w0 = MathConstants<double>::twoPi * jlimit (10.0, fs * 0.49, band.freq) / fs;
+        const double cw = std::cos (w0), alpha = std::sin (w0) / (2.0 * band.q);
+        double b0, b1, b2, a0, a1, a2;
+        if (band.type == EqBand::peak)
+        {
+            b0 = 1 + alpha * A; b1 = -2 * cw; b2 = 1 - alpha * A;
+            a0 = 1 + alpha / A; a1 = -2 * cw; a2 = 1 - alpha / A;
+        }
+        else
+        {
+            const double sq = 2 * std::sqrt (A) * alpha;
+            const double sign = band.type == EqBand::lowShelf ? 1.0 : -1.0;
+            b0 =        A * ((A + 1) - sign * (A - 1) * cw + sq);
+            b1 = sign * 2 * A * ((A - 1) - sign * (A + 1) * cw);
+            b2 =        A * ((A + 1) - sign * (A - 1) * cw - sq);
+            a0 =            (A + 1) + sign * (A - 1) * cw + sq;
+            a1 = -sign * 2 * ((A - 1) + sign * (A + 1) * cw);
+            a2 =            (A + 1) + sign * (A - 1) * cw - sq;
+        }
+        const auto h = (b0 + b1 * z1 + b2 * z2) / (a0 + a1 * z1 + a2 * z2);
+        totalDb += 20.0 * std::log10 (jmax (1.0e-9, std::abs (h)));
+    }
+    return totalDb;
+}
+
+class EqCurve : public Component
+{
+public:
+    void setProfile (const EqProfile& p) { profile = p; repaint(); }
+
+    void paint (Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat();
+        g.setColour (Colour (0xff1b1b1b));
+        g.fillRoundedRectangle (r, 6.0f);
+        auto plot = r.reduced (34.0f, 16.0f).withTrimmedBottom (10.0f);
+        const float range = 12.0f;
+        auto xFor = [&] (double f) { return plot.getX() + plot.getWidth() * (float) (std::log10 (f / 20.0) / 3.0); };
+        auto yFor = [&] (double db) { return plot.getCentreY() - plot.getHeight() * 0.5f * (float) (jlimit (-range, range, (float) db) / range); };
+
+        g.setFont (FontOptions (11.0f));
+        for (double f : { 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0 })
+        {
+            g.setColour (Colours::white.withAlpha (0.08f));
+            g.drawVerticalLine ((int) xFor (f), plot.getY(), plot.getBottom());
+            g.setColour (Colours::grey);
+            g.drawText (f >= 1000.0 ? String ((int) (f / 1000)) + "k" : String ((int) f),
+                        (int) xFor (f) - 16, (int) plot.getBottom() + 2, 32, 14, Justification::centred);
+        }
+        for (double db : { -12.0, -6.0, 0.0, 6.0, 12.0 })
+        {
+            g.setColour (Colours::white.withAlpha (std::abs (db) < 0.01 ? 0.25f : 0.08f));
+            g.drawHorizontalLine ((int) yFor (db), plot.getX(), plot.getRight());
+            g.setColour (Colours::grey);
+            g.drawText ((db > 0 ? "+" : "") + String ((int) db), 2, (int) yFor (db) - 7, 28, 14, Justification::centredRight);
+        }
+
+        if (profile.bands.empty())
+        {
+            g.setColour (Colours::grey);
+            g.setFont (FontOptions (14.0f));
+            g.drawText ("Empty slot", plot, Justification::centred);
+            return;
+        }
+
+        Path curve;
+        for (int i = 0; i <= 300; ++i)
+        {
+            const double f = 20.0 * std::pow (1000.0, i / 300.0);
+            const auto pt = Point<float> (xFor (f), yFor (eqResponseDb (profile, f)));
+            if (i == 0) curve.startNewSubPath (pt); else curve.lineTo (pt);
+        }
+        g.setColour (Colour (0xff4aa3df));
+        g.strokePath (curve, PathStrokeType (2.0f));
+    }
+
+private:
+    EqProfile profile;
+};
+
 //==============================================================================
 // Runs the plugin on the audio thread.
 class HostEngine : public AudioIODeviceCallback
@@ -312,7 +404,9 @@ public:
     void setMuted (bool m) { muted = m; }
     static constexpr int maxChannels = 32;
     // Which device input channel feeds each plugin input channel (-1 = silent).
-    void setBypass (bool b) { bypass = b; }
+    // Speaker simulation off (or no plugin): the routed input is downmixed to stereo ("dry").
+    void setSpeakerSimulation (bool on) { speakerSimulation = on; }
+    void setDryChannels (int n) { dryChannels = jlimit (1, maxChannels, n); }
     HeadphoneEq& getHeadphoneEq() { return headphoneEq; }
 
     // Stereo downmix gains per plugin input channel, used while bypassed (set while stopped).
@@ -341,7 +435,7 @@ public:
 
         const int deviceChannels = jmax (device->getActiveInputChannels().countNumberOfSetBits(),
                                          device->getActiveOutputChannels().countNumberOfSetBits());
-        int channels = jmax (deviceChannels, 2);
+        int channels = jmax (deviceChannels, 2, dryChannels.load());
 
         if (plugin != nullptr)
         {
@@ -373,14 +467,15 @@ public:
     {
         callbackCount.fetch_add (1);
         auto* p = plugin;
-        if (p == nullptr || muted || numSamples > buffer.getNumSamples())
+        if (muted || numSamples > buffer.getNumSamples())
         {
             clearOutputs (outputs, numOutputs, numSamples);
             return;
         }
 
-        const int pluginIns  = p->getTotalNumInputChannels();
-        const int pluginOuts = p->getTotalNumOutputChannels();
+        const bool usePlugin = p != nullptr && speakerSimulation;
+        const int pluginIns  = p != nullptr ? p->getTotalNumInputChannels()  : dryChannels.load();
+        const int pluginOuts = p != nullptr ? p->getTotalNumOutputChannels() : 2;
         const int channels   = jmin (buffer.getNumChannels(), jmax (pluginIns, pluginOuts));
 
         AudioBuffer<float> block (buffer.getArrayOfWritePointers(), channels, numSamples);
@@ -395,11 +490,11 @@ public:
                 block.clear (ch, 0, numSamples);
         }
 
-        if (bypass)
+        if (! usePlugin)
         {
-            // Dry signal for A/B comparisons: the routed input, downmixed to stereo.
+            // Dry signal (speaker simulation off or no plugin): the routed input, downmixed to stereo.
             writeDownmix (block, jmin (channels, pluginIns), outputs, numOutputs, numSamples);
-            headphoneEq.process (outputs, numOutputs, numSamples); // AutoEQ also applies in bypass
+            headphoneEq.process (outputs, numOutputs, numSamples); // headphone correction works on its own too
             applySoftStart (outputs, numOutputs, numSamples);
             return;
         }
@@ -475,7 +570,8 @@ private:
     }
 
     AudioPluginInstance* plugin = nullptr;
-    std::atomic<bool> muted { false }, bypass { false }, deviceError { false };
+    std::atomic<bool> muted { false }, speakerSimulation { true }, deviceError { false };
+    std::atomic<int> dryChannels { 8 };
     HeadphoneEq headphoneEq;
     std::atomic<uint32> callbackCount { 0 };
     std::array<std::pair<float, float>, maxChannels> downmix {};
@@ -570,11 +666,16 @@ public:
                                         dontSendNotification);
         layoutBox.onChange = [this] { settings->setValue ("layout", layoutBox.getSelectedItemIndex()); applyLayout(); };
 
-        addAndMakeVisible (bypassButton);
-        bypassButton.setClickingTogglesState (true);
-        bypassButton.setColour (TextButton::buttonOnColourId, amber.darker (0.3f));
-        bypassButton.setTooltip ("Hear the input without the plugin (7.1 is downmixed to stereo) for A/B comparisons.");
-        bypassButton.onClick = [this] { engine.setBypass (bypassButton.getToggleState()); };
+        addAndMakeVisible (speakerSimButton);
+        speakerSimButton.setButtonText ("Speaker simulation");
+        speakerSimButton.setTooltip ("Off: hear the input without the plugin (surround is downmixed to stereo) - e.g. for A/B comparisons.");
+        speakerSimButton.setToggleState (settings->getBoolValue ("speakerSim", true), dontSendNotification);
+        engine.setSpeakerSimulation (speakerSimButton.getToggleState());
+        speakerSimButton.onClick = [this]
+        {
+            engine.setSpeakerSimulation (speakerSimButton.getToggleState());
+            settings->setValue ("speakerSim", speakerSimButton.getToggleState());
+        };
 
         addAndMakeVisible (channelsButton);
         channelsButton.onClick = [this] { showChannelRouting(); };
@@ -582,19 +683,25 @@ public:
         routingLabel.setColour (Label::textColourId, Colours::lightgrey);
         loadInputMap();
 
-        // AutoEQ headphone correction (global, also active in bypass)
+        // Headphone correction (AutoEq profiles; global, works with or without speaker simulation)
         addAndMakeVisible (autoEqButton);
-        autoEqButton.setButtonText ("AutoEQ");
-        autoEqButton.setTooltip ("Headphone correction from the AutoEq database (also active in bypass).");
+        autoEqButton.setButtonText ("Headphone correction");
+        autoEqButton.setTooltip ("AutoEq headphone correction - works with or without speaker simulation.");
         autoEqButton.setToggleState (settings->getBoolValue ("autoeqEnabled", false), dontSendNotification);
         autoEqButton.onClick = [this] { settings->setValue ("autoeqEnabled", autoEqButton.getToggleState()); applyAutoEq(); };
         addAndMakeVisible (autoEqSlotBox);
         refreshAutoEqSlots();
         autoEqSlotBox.setSelectedItemIndex (jlimit (0, 2, settings->getIntValue ("autoeqSlot", 0)), dontSendNotification);
-        autoEqSlotBox.onChange = [this] { settings->setValue ("autoeqSlot", autoEqSlotBox.getSelectedItemIndex()); applyAutoEq(); };
+        autoEqSlotBox.onChange = [this]
+        {
+            settings->setValue ("autoeqSlot", autoEqSlotBox.getSelectedItemIndex());
+            applyAutoEq();
+            notifyHeadphoneWindow();
+        };
         addAndMakeVisible (autoEqSearchButton);
-        autoEqSearchButton.onClick = [this] { showAutoEqSearch(); };
+        autoEqSearchButton.onClick = [this] { showHeadphoneWindow(); };
         applyAutoEq();
+        updateDownmix(); // dry path is ready even before a plugin is loaded
 
         addAndMakeVisible (trackingButton);
         trackingButton.setButtonText ("Head tracking");
@@ -737,13 +844,13 @@ public:
         bar.removeFromTop (8);
         bar.removeFromTop (8);
         auto row5 = bar.removeFromBottom (26);
-        autoEqButton.setBounds (row5.removeFromLeft (90));
+        autoEqButton.setBounds (row5.removeFromLeft (190));
         autoEqSlotBox.setBounds (row5.removeFromLeft (360));
         row5.removeFromLeft (10);
-        autoEqSearchButton.setBounds (row5.removeFromLeft (160));
+        autoEqSearchButton.setBounds (row5.removeFromLeft (200));
 
         auto row4 = bar.removeFromTop (26);
-        bypassButton.setBounds (row4.removeFromLeft (110));
+        speakerSimButton.setBounds (row4.removeFromLeft (170));
         row4.removeFromLeft (10);
         channelsButton.setBounds (row4.removeFromLeft (110));
         row4.removeFromLeft (10);
@@ -843,6 +950,7 @@ private:
         params = {};
         for (auto& box : axisBoxes)
             box.clear (dontSendNotification);
+        updateDownmix();
     }
 
     void loadPlugin (const File& file)
@@ -937,6 +1045,7 @@ private:
     {
         std::vector<std::pair<float, float>> gains;
         const auto names = pluginChannelNames();
+        engine.setDryChannels (jmax (2, names.size()));
         const float m3 = 0.7071f, scale = names.size() > 2 ? 0.5f : 1.0f;
         for (auto& n : names)
         {
@@ -958,10 +1067,11 @@ private:
 
     void applyLayout()
     {
-        if (plugin == nullptr)
-            return;
         deviceManager.removeAudioCallback (&engine);
-        setPluginLayout();
+        if (plugin != nullptr)
+            setPluginLayout();
+        else
+            updateDownmix();
         deviceManager.addAudioCallback (&engine);
     }
 
@@ -1256,12 +1366,6 @@ private:
             c = amber; status = "Safe start - the last start did not complete";
             detail = "The saved audio device and plugin were not opened. Choose them again - your settings are kept.";
         }
-        else if (plugin == nullptr)
-        {
-            c = lastError.isNotEmpty() ? red : amber;
-            status = "Choose a plugin";
-            detail = lastError.isNotEmpty() ? lastError : "Pick it from the list or click \"Browse...\".";
-        }
         else if (recovering && restartAttempts >= 5 && now - lastCallbackTime > 2000)
         {
             c = red; status = "Audio device not responding";
@@ -1281,15 +1385,20 @@ private:
         {
             c = red; status = "No audio device"; detail = "Click \"Audio settings...\" and choose your input and output.";
         }
-        else if (bypassButton.getToggleState())
-        {
-            c = amber; status = "Bypassed - you hear the dry input";
-            detail = "Click \"Bypass (dry)\" again to hear the plugin.";
-        }
         else if (feedbackRisk)
         {
             c = red; status = "Output muted: input and output are the same loopback device";
             detail = "In \"Audio settings...\" choose your headphones or interface as output.";
+        }
+        else if (plugin == nullptr || ! speakerSimButton.getToggleState())
+        {
+            const bool hpOn = autoEqButton.getToggleState() && engine.getHeadphoneEq().isActive();
+            c = hpOn ? green : amber;
+            status = (plugin == nullptr ? String ("No plugin") : String ("Speaker simulation off"))
+                     + (hpOn ? " - headphone correction only" : " - dry signal");
+            detail = lastError.isNotEmpty() ? lastError
+                   : plugin == nullptr ? "Choose a plugin for speaker simulation, or use headphone correction alone."
+                                       : "Tick \"Speaker simulation\" to hear the plugin again.";
         }
         else if (! trackingButton.getToggleState())
         {
@@ -1372,15 +1481,17 @@ private:
         routingLabel.setText (inputMap.empty() ? "Input routing: 1:1" : "Input routing: custom", dontSendNotification);
     }
 
+    // Input channels of the plugin, or of the chosen input layout when no plugin is loaded.
     StringArray pluginChannelNames() const
     {
         StringArray names;
+        AudioChannelSet layout;
         if (plugin != nullptr && plugin->getBusCount (true) > 0)
-        {
-            const auto layout = plugin->getBus (true, 0)->getCurrentLayout();
-            for (int i = 0; i < layout.size(); ++i)
-                names.add (AudioChannelSet::getAbbreviatedChannelTypeName (layout.getTypeOfChannel (i)));
-        }
+            layout = plugin->getBus (true, 0)->getCurrentLayout();
+        else
+            layout = inputLayouts()[(size_t) jlimit (0, (int) inputLayouts().size() - 1, layoutBox.getSelectedItemIndex())].set;
+        for (int i = 0; i < layout.size(); ++i)
+            names.add (AudioChannelSet::getAbbreviatedChannelTypeName (layout.getTypeOfChannel (i)));
         return names;
     }
 
@@ -1499,7 +1610,7 @@ private:
         const int slot = jmax (0, autoEqSlotBox.getSelectedItemIndex());
         const auto profile = parseAutoEq (settings->getValue (slotKey (slot, "text")));
         engine.getHeadphoneEq().setProfile (profile, autoEqButton.getToggleState());
-        autoEqSlotBox.setTooltip (profile.isEmpty() ? "Empty slot - click \"Find headphones...\" to fill it."
+        autoEqSlotBox.setTooltip (profile.isEmpty() ? "Empty slot - click \"Headphone correction...\" to fill it."
                                                     : String ((int) profile.bands.size()) + " filters, preamp "
                                                           + String (profile.preampDb, 1) + " dB");
     }
@@ -1512,27 +1623,175 @@ private:
         refreshAutoEqSlots();
         autoEqSlotBox.setSelectedItemIndex (slot, sendNotification);
         applyAutoEq();
+        notifyHeadphoneWindow();
     }
 
-    File autoEqIndexCache() const
+    void clearAutoEqSlot (int slot)
     {
-        return settings->getFile().getSiblingFile ("Head Tracking Host AutoEq index.md");
+        settings->removeValue (slotKey (slot, "name"));
+        settings->removeValue (slotKey (slot, "text"));
+        settings->saveIfNeeded();
+        refreshAutoEqSlots();
+        applyAutoEq();
+        notifyHeadphoneWindow();
+    }
+
+    int activeSlot() const { return jmax (0, autoEqSlotBox.getSelectedItemIndex()); }
+    String slotName (int slot) const { return settings->getValue (slotKey (slot, "name")); }
+    EqProfile slotProfile (int slot) const { return parseAutoEq (settings->getValue (slotKey (slot, "text"))); }
+
+    // Window with the three slots, the curve, database search and file import.
+    class HeadphoneWindow : public Component
+    {
+    public:
+        explicit HeadphoneWindow (MainComponent& o) : owner (o)
+        {
+            addAndMakeVisible (slotBox);
+            slotBox.onChange = [this]
+            {
+                owner.autoEqSlotBox.setSelectedItemIndex (slotBox.getSelectedItemIndex(), sendNotification);
+                refresh();
+            };
+            addAndMakeVisible (curve);
+            addAndMakeVisible (info);
+            info.setColour (Label::textColourId, Colours::lightgrey);
+            for (auto* b : { &findButton, &importButton, &clearButton })
+                addAndMakeVisible (b);
+            findButton.onClick   = [this] { owner.showAutoEqSearch(); };
+            importButton.onClick = [this] { importFile(); };
+            clearButton.onClick  = [this] { owner.clearAutoEqSlot (slotBox.getSelectedItemIndex()); };
+            addAndMakeVisible (hint);
+            hint.setColour (Label::textColourId, Colours::grey);
+            hint.setText ("Import: AutoEq \"ParametricEQ.txt\" (from autoeq.app or GitHub, same format as Equalizer APO).",
+                          dontSendNotification);
+            setSize (640, 460);
+            refresh();
+        }
+
+        void refresh()
+        {
+            slotBox.clear (dontSendNotification);
+            for (int i = 0; i < 3; ++i)
+            {
+                const auto name = owner.slotName (i);
+                slotBox.addItem ("Slot " + String (i + 1) + ": " + (name.isNotEmpty() ? name : String ("(empty)")), i + 1);
+            }
+            const int slot = owner.activeSlot();
+            slotBox.setSelectedItemIndex (slot, dontSendNotification);
+            const auto profile = owner.slotProfile (slot);
+            curve.setProfile (profile);
+            info.setText (profile.bands.empty() ? String ("This slot is empty - find your headphones or import a file.")
+                                                : String ((int) profile.bands.size()) + " filters, preamp "
+                                                      + String (profile.preampDb, 1) + " dB (keeps the level safe)",
+                          dontSendNotification);
+        }
+
+        void resized() override
+        {
+            auto r = getLocalBounds().reduced (12);
+            slotBox.setBounds (r.removeFromTop (28));
+            r.removeFromTop (10);
+            auto buttons = r.removeFromBottom (28);
+            findButton.setBounds (buttons.removeFromLeft (200));
+            buttons.removeFromLeft (8);
+            importButton.setBounds (buttons.removeFromLeft (150));
+            clearButton.setBounds (buttons.removeFromRight (110));
+            r.removeFromBottom (6);
+            hint.setBounds (r.removeFromBottom (20));
+            info.setBounds (r.removeFromBottom (22));
+            r.removeFromBottom (6);
+            curve.setBounds (r);
+        }
+
+    private:
+        void importFile()
+        {
+            chooser = std::make_unique<FileChooser> ("Import an AutoEq ParametricEQ.txt",
+                                                     File::getSpecialLocation (File::userHomeDirectory), "*.txt");
+            const int slot = slotBox.getSelectedItemIndex();
+            Component::SafePointer<HeadphoneWindow> safe (this);
+            chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
+                                  [safe, slot] (const FileChooser& fc)
+                                  {
+                                      const auto file = fc.getResult();
+                                      if (safe == nullptr || ! file.existsAsFile())
+                                          return;
+                                      const auto text = file.loadFileAsString();
+                                      if (parseAutoEq (text).bands.empty())
+                                      {
+                                          safe->info.setText ("No EQ filters found in " + file.getFileName()
+                                                                  + " - expected an AutoEq ParametricEQ.txt.", dontSendNotification);
+                                          return;
+                                      }
+                                      auto name = file.getFileNameWithoutExtension();
+                                      name = name.endsWithIgnoreCase (" ParametricEQ") ? name.dropLastCharacters (13) : name;
+                                      safe->owner.storeAutoEqSlot (slot, name + " (imported)", text);
+                                  });
+        }
+
+        MainComponent& owner;
+        ComboBox slotBox;
+        EqCurve curve;
+        Label info, hint;
+        TextButton findButton { "Find in database..." }, importButton { "Import file..." }, clearButton { "Clear slot" };
+        std::unique_ptr<FileChooser> chooser;
+    };
+
+    Component::SafePointer<HeadphoneWindow> headphoneWindow;
+
+    void notifyHeadphoneWindow()
+    {
+        if (headphoneWindow != nullptr)
+            headphoneWindow->refresh();
+    }
+
+    void showHeadphoneWindow()
+    {
+        auto* content = new HeadphoneWindow (*this);
+        headphoneWindow = content;
+        DialogWindow::LaunchOptions o;
+        o.content.setOwned (content);
+        o.dialogTitle = "Headphone correction";
+        o.dialogBackgroundColour = panel;
+        o.escapeKeyTriggersCloseButton = true;
+        o.useNativeTitleBar = true;
+        o.resizable = false;
+        o.launchAsync();
+    }
+
+    File autoEqIndexCache (bool all) const
+    {
+        return settings->getFile().getSiblingFile (all ? "Head Tracking Host AutoEq index.md"
+                                                        : "Head Tracking Host AutoEq recommended.md");
     }
 
     struct AutoEqEntry { String name, source, path; };
 
+    // Recommended list (results/README.md): "- [Name](./source/rig/Name%20Encoded)"
+    // Full index (results/INDEX.md):        "- [Name](./source/rig/Name%20Encoded) by Source on Rig"
     static std::vector<AutoEqEntry> parseAutoEqIndex (const String& text)
     {
-        // "- [Name](./source/rig/Name%20Encoded) by Source on Rig"
         std::vector<AutoEqEntry> entries;
         for (auto line : StringArray::fromLines (text))
         {
-            if (! line.startsWith ("- [") || ! line.contains ("](./") || ! line.contains (") by "))
+            line = line.trimEnd();
+            if (! line.startsWith ("- [") || ! line.contains ("](./"))
                 continue;
             AutoEqEntry e;
-            e.name   = line.fromFirstOccurrenceOf ("- [", false, false).upToFirstOccurrenceOf ("](./", false, false);
-            e.path   = line.fromFirstOccurrenceOf ("](./", false, false).upToLastOccurrenceOf (") by ", false, false);
-            e.source = line.fromLastOccurrenceOf (") by ", false, false).trim();
+            e.name = line.fromFirstOccurrenceOf ("- [", false, false).upToFirstOccurrenceOf ("](./", false, false);
+            const auto rest = line.fromFirstOccurrenceOf ("](./", false, false);
+            if (rest.contains (") by "))
+            {
+                e.path   = rest.upToLastOccurrenceOf (") by ", false, false);
+                e.source = rest.fromLastOccurrenceOf (") by ", false, false).trim();
+            }
+            else
+            {
+                if (! rest.endsWith (")"))
+                    continue;
+                e.path   = rest.dropLastCharacters (1);
+                e.source = URL::removeEscapeChars (e.path.upToFirstOccurrenceOf ("/", false, false));
+            }
             if (e.name.isNotEmpty() && e.path.isNotEmpty())
                 entries.push_back (e);
         }
@@ -1568,7 +1827,11 @@ private:
             }
             addAndMakeVisible (refreshButton);
             refreshButton.onClick = [this] { loadIndex (true); };
-            setSize (620, 520);
+            addAndMakeVisible (showAllButton);
+            showAllButton.setButtonText ("Show all measurements");
+            showAllButton.setTooltip ("Off: one recommended measurement per headphone. On: every source (oratory1990, crinacle, Rtings ...).");
+            showAllButton.onClick = [this] { loadIndex (false); };
+            setSize (620, 540);
             loadIndex (false);
         }
 
@@ -1576,7 +1839,9 @@ private:
         {
             auto r = getLocalBounds().reduced (12);
             searchBox.setBounds (r.removeFromTop (28));
-            r.removeFromTop (8);
+            r.removeFromTop (6);
+            showAllButton.setBounds (r.removeFromTop (24).withWidth (240));
+            r.removeFromTop (4);
             auto bottom = r.removeFromBottom (28);
             for (auto* b : saveButtons)
             {
@@ -1608,7 +1873,8 @@ private:
 
         void loadIndex (bool forceDownload)
         {
-            const auto cache = owner.autoEqIndexCache();
+            const bool all = showAllButton.getToggleState();
+            const auto cache = owner.autoEqIndexCache (all);
             if (! forceDownload && cache.existsAsFile())
             {
                 setEntries (parseAutoEqIndex (cache.loadFileAsString()), "List from cache.");
@@ -1616,9 +1882,10 @@ private:
             }
             status.setText ("Downloading headphone list...", dontSendNotification);
             Component::SafePointer<AutoEqSearch> safe (this);
-            Thread::launch ([safe, cache]
+            const auto file = String (all ? "INDEX.md" : "README.md");
+            Thread::launch ([safe, cache, file]
             {
-                const auto text = downloadText (autoEqBase + "INDEX.md");
+                const auto text = downloadText (autoEqBase + file);
                 MessageManager::callAsync ([safe, cache, text]
                 {
                     if (safe == nullptr)
@@ -1699,6 +1966,7 @@ private:
         Label status;
         OwnedArray<TextButton> saveButtons;
         TextButton refreshButton { "Refresh list" };
+        ToggleButton showAllButton;
         std::vector<AutoEqEntry> entries;
         std::vector<int> shown;
     };
@@ -1767,11 +2035,12 @@ private:
     Label statusLabel, detailLabel;
     Label pluginLabel { {}, "Plugin" }, portLabel { {}, "Bridgehead port" }, layoutLabel { {}, "Input" };
     ComboBox pluginBox, layoutBox;
-    TextButton channelsButton { "Channels..." }, bypassButton { "Bypass (dry)" };
+    TextButton channelsButton { "Channels..." };
+    ToggleButton speakerSimButton;
     Label routingLabel;
     ToggleButton trackingButton, autoEqButton;
     ComboBox autoEqSlotBox;
-    TextButton autoEqSearchButton { "Find headphones..." };
+    TextButton autoEqSearchButton { "Headphone correction..." };
     std::vector<int> inputMap; // device input channel for each plugin input channel, -1 = off
     TextButton browseButton { "Browse..." }, audioButton { "Audio settings..." };
     TextEditor portEditor;

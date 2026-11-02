@@ -53,29 +53,32 @@ all settings stay.
 **Without head tracking:** untick **Head tracking**. The app stops listening to Bridgehead,
 frees the port, sets Yaw/Pitch/Roll to 0° and leaves the plugin's knobs to you.
 
-**AutoEQ (headphone correction):** for plugins without their own headphone correction.
-1. Click **Find headphones...**, search your model (e.g. "ATH-M50x") and pick a measurement.
-   The list comes from the [AutoEq](https://github.com/jaakkopasanen/AutoEq) database (internet
-   needed only for searching; the list is cached).
-2. Click **Save to slot 1/2/3**. Up to three profiles are stored for offline use.
-3. Choose the slot in the dropdown and tick **AutoEQ**.
+## Two switches: speaker simulation and headphone correction
 
-AutoEQ also applies in **Bypass (dry)**, so A/B compares only the plugin. Don't combine it with a
-plugin's own headphone correction (e.g. Virtuoso's HPC EQ), otherwise the headphones are corrected
-twice. The profiles use AutoEq's Harman target.
+- **Speaker simulation** – on: the plugin (e.g. Virtuoso) renders your speakers. Off: you hear the
+  input without the plugin (surround downmixed to stereo) – handy for A/B comparisons.
+- **Headphone correction** – AutoEq correction for your headphones, on or off. It works **with or
+  without** speaker simulation, and even without any plugin loaded – then Head Tracking Host is a
+  system-wide headphone EQ. For stereo sources set **Input** to **Stereo** (the 7.1 downmix is a bit
+  quieter to avoid clipping).
 
-**A/B comparison:** **Bypass (dry)** plays the input without the plugin. Stereo passes through
-unchanged; surround is downmixed to stereo (centre and surrounds at −3 dB, LFE left out, a bit
-quieter overall so it does not clip).
+Don't combine headphone correction with a plugin's own headphone correction (e.g. Virtuoso's HPC EQ),
+otherwise the headphones are corrected twice.
 
-Everything is saved and restored on the next start: audio devices, Bridgehead port, the last plugin
-and, per plugin, its own settings, the chosen parameters and the invert options.
+### Headphone correction window
 
-**Input channels:** click **Channels...** to choose which audio input feeds each plugin channel
-(L, R, C, LFE, Lss, Rss, Lrs, Rrs …). This works with every plugin. On Windows the 7.1 side and
-rear surrounds often arrive swapped – the preset **Swap side/rear (Windows)** fixes that in one
-click, **Reset (1:1)** restores the normal order. (If you corrected this in a plugin's own matrix
-before, set that matrix back to normal.)
+Click **Headphone correction...**:
+- **Three slots** store profiles offline; the dropdown (here or in the main window) picks the active one.
+- **Find in database...** searches the [AutoEq](https://github.com/jaakkopasanen/AutoEq) database
+  (internet needed only for searching, the list is cached). By default it shows the **recommended
+  measurement** per headphone; tick **Show all measurements** to see every source
+  (oratory1990, crinacle, Rtings ...). Select a headphone and click **Save to slot 1/2/3**.
+- **Import file...** loads an AutoEq **ParametricEQ.txt** into the selected slot – download it from
+  autoeq.app or the AutoEq GitHub page (same format as Equalizer APO). No internet needed afterwards.
+- **Clear slot** empties it. The **curve** shows the correction of the selected slot.
+
+The profiles use AutoEq's Harman targets (over-ear target for over-ear, in-ear target for in-ear).
+The EQ is minimum-phase (IIR) and adds **no latency** – important with head tracking.
 
 ## Hearing protection
 
