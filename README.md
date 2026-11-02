@@ -39,10 +39,10 @@ all settings stay.
 4. **Audio settings...** – the same devices you use for the standalone app:
    - **Windows:** device type **ASIO**, device **FlexASIO**. Enable the input channels
      (IN 0–7 for 7.1) and the output channels.
-   - **Mac:** choose your device, e.g. an **aggregate device** with BlackHole and your headphones
-     (recommended for drift correction). Enable the **BlackHole input channels** (1–8 for 7.1) and
-     **only the two output channels of your headphones** – not BlackHole's outputs.
-     macOS asks for microphone access on first start; allow it, otherwise no audio arrives.
+   - **Mac:** input = your **aggregate device** with BlackHole (created in Audio MIDI Setup with drift
+     correction for BlackHole and your headphones as clock source), output = your **headphones**.
+     Enable the **BlackHole input channels** (1–8 for 7.1). macOS asks for microphone access on
+     first start; allow it, otherwise no audio arrives.
 5. **Yaw / Pitch / Roll:** choose the plugin parameters. For Virtuoso they are selected
    automatically (HT Yaw, HT Pitch, HT Roll).
 6. **In the plugin:** turn off its own head tracking input. Virtuoso: Head tracking → **Manual**.
