@@ -120,7 +120,7 @@ The EQ is minimum-phase (IIR) and adds **no latency** – important with head tr
 
 If the audio stream stops – e.g. the audio device went to sleep after a pause, another program
 changed the sample rate, or the device was briefly disconnected – Head Tracking Host notices it
-within about two seconds and reopens the device automatically (status: "Reconnecting audio
+within about four seconds and reopens the device automatically (status: "Reconnecting audio
 device..."), with a soft fade-in. A device that is still starting up is left alone, and retries
 slow down (3 s, 10 s, 30 s) and stop after five attempts.
 

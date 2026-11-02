@@ -1662,19 +1662,22 @@ private:
 
         const bool error   = engine.takeDeviceError();
         const bool inGrace = now - audioStartTime < 5000;          // device may still be starting
-        const bool stalled = device != nullptr && streamWasRunning && now - lastCallbackTime > 2000;
+        // Only a stream that stops completely for 4 s counts - short stalls while the source changes,
+        // pauses or stops (and device error notifications on their own) are left alone.
+        const bool stalled = device != nullptr && streamWasRunning && now - lastCallbackTime > 4000;
         const bool lost    = device == nullptr && streamWasRunning;
-        const bool stillDown = recovering && now - lastCallbackTime > 2000;
+        const bool stillDown = recovering && now - lastCallbackTime > 4000;
 
         static constexpr uint32 backoff[] = { 3000, 10000, 30000 };
         const auto wait = backoff[jmin (restartAttempts, 2)];
 
         if (inGrace || restartAttempts >= 5 || now - lastRestartAttempt < wait)
             return;
-        if (! (stalled || lost || stillDown || (error && streamWasRunning)))
+        ignoreUnused (error);
+        if (! (stalled || lost || stillDown))
             return;
 
-        lastRestartAttempt = now;
+        lastRestartAttempt = lastReconnectShown = now;
         ++restartAttempts;
         recovering = true;
         streamWasRunning = false;
@@ -1718,6 +1721,11 @@ private:
         {
             c = amber; status = "Reconnecting audio device...";
             detail = "The audio stream stopped (e.g. power saving or a sample rate change). Retrying automatically.";
+        }
+        else if (lastReconnectShown != 0 && now - lastReconnectShown < 10000)
+        {
+            c = amber; status = "Audio device reconnected";
+            detail = "The audio stream had stopped for 4 seconds and was reopened automatically.";
         }
         else if (microphoneDenied)
         {
@@ -2371,7 +2379,7 @@ private:
     bool safeMode = false, startupCleared = false, audioSettingsOpened = false;
     bool streamWasRunning = false, recovering = false;
     int restartAttempts = 0;
-    uint32 lastCallbackCount = 0, lastCallbackTime = 0, lastRestartAttempt = 0, audioStartTime = 0;
+    uint32 lastCallbackCount = 0, lastCallbackTime = 0, lastRestartAttempt = 0, audioStartTime = 0, lastReconnectShown = 0;
 
     OSCReceiver receiver;
     int currentPort = 0;
