@@ -1323,6 +1323,7 @@ private:
             }
         }
         lastError = {};
+        pluginLoadedTime = Time::getMillisecondCounter();
         updateSize();
     }
 
@@ -1704,6 +1705,8 @@ private:
         const bool receivingAngles = now - lastAngleTime < 1000;
         const bool receivingAnything = messagesReceived != lastCountedMessages;
         lastCountedMessages = messagesReceived;
+        const bool trackingNeeded = trackingButton.getToggleState() && plugin != nullptr
+                                    && speakerSimButton.getToggleState();
 
         Colour c = green;
         String status, detail;
@@ -1742,44 +1745,52 @@ private:
             c = red; status = "Output muted: input and output are the same loopback device";
             detail = "In \"Audio settings...\" choose your headphones or interface as output.";
         }
-        else if (plugin == nullptr || ! speakerSimButton.getToggleState())
+        else if (plugin == nullptr && lastError.isNotEmpty())
         {
-            const bool hpOn = autoEqButton.getToggleState() && engine.getHeadphoneEq().isActive();
-            c = hpOn ? green : amber;
-            status = (plugin == nullptr ? String ("No plugin") : String ("Speaker simulation off"))
-                     + (hpOn ? " - headphone correction only" : " - dry signal");
-            detail = lastError.isNotEmpty() ? lastError
-                   : plugin == nullptr ? "Choose a plugin for speaker simulation, or use headphone correction alone."
-                                       : "Tick \"Speaker simulation\" to hear the plugin again.";
+            c = amber; status = "Plugin not loaded";
+            detail = lastError;
         }
-        else if (! trackingButton.getToggleState())
-        {
-            status = "Head tracking off";
-            detail = "The plugin's knobs can be turned by hand.  Input: " + activeLayout;
-        }
-        else if (! oscConnected)
+        else if (trackingNeeded && ! oscConnected)
         {
             c = red; status = "Port " + String (currentPort) + " is in use";
             detail = "Close other programs listening on this port (e.g. a standalone renderer with OSC head tracking).";
         }
-        else if (mappedAxes() == 0)
+        else if (trackingNeeded && mappedAxes() == 0)
         {
             c = amber; status = "Choose the plugin parameters for Yaw, Pitch and Roll";
         }
-        else if (receivingAngles)
-        {
-            status = "Head tracking active (" + String (rate) + "/s)";
-            detail = "Turn off the plugin's own head tracking input (e.g. Virtuoso: Manual).  Input: " + activeLayout;
-        }
-        else if (receivingAnything)
+        else if (trackingNeeded && ! receivingAngles && receivingAnything)
         {
             c = amber; status = "Receiving " + lastAddress + " - but no yaw/pitch/roll";
-            detail = "Choose the Bridgehead profile \"IEM Scene Rotator YPR\".";
+            detail = "Send /SceneRotator/yaw, /pitch and /roll (Bridgehead: profile \"IEM Scene Rotator YPR\").";
+        }
+        else if (trackingNeeded && ! receivingAngles)
+        {
+            c = amber; status = "No head tracking data on port " + String (currentPort);
+            detail = "Start your head tracker app (e.g. Bridgehead, profile \"IEM Scene Rotator YPR\"), or turn head tracking off.";
         }
         else
         {
-            c = amber; status = "Waiting for Bridgehead on port " + String (currentPort);
-            detail = "Bridgehead profile: IEM Scene Rotator YPR.  Input: " + activeLayout;
+            // All good: show what cannot be read anywhere else.
+            const String sep = String::fromUTF8 ("  \xc2\xb7  "), arrow = String::fromUTF8 ("  \xe2\x86\x92  ");
+            auto* device = deviceManager.getCurrentAudioDevice();
+            const double sr = device->getCurrentSampleRate();
+            const int block = device->getCurrentBufferSizeSamples();
+            int latency = block + device->getInputLatencyInSamples() + device->getOutputLatencyInSamples();
+            if (plugin != nullptr && speakerSimButton.getToggleState())
+                latency += plugin->getLatencySamples();
+            status = (std::fmod (sr, 1000.0) == 0.0 ? String ((int) (sr / 1000.0)) : String (sr / 1000.0, 1)) + " kHz" + sep
+                   + (plugin != nullptr ? activeLayout : String (device->getActiveInputChannels().countNumberOfSetBits()) + " ch")
+                   + sep + String (sr > 0 ? 1000.0 * latency / sr : 0.0, 1) + " ms";
+
+            AudioDeviceManager::AudioDeviceSetup setup;
+            deviceManager.getAudioDeviceSetup (setup);
+            String route = setup.inputDeviceName == setup.outputDeviceName || setup.inputDeviceName.isEmpty()
+                         ? device->getName() : setup.inputDeviceName + arrow + setup.outputDeviceName;
+            detail = (trackingNeeded ? "Tracker " + String (rate) + "/s" + sep : String()) + route
+                   + sep + "buffer " + String (block);
+            if (trackingNeeded && now - pluginLoadedTime < 20000)
+                detail = "Turn off the plugin's own head tracking input (e.g. Virtuoso: Manual).";
         }
 
         statusDot.colour = c;
@@ -2386,7 +2397,7 @@ private:
     int currentPort = 0;
     bool oscConnected = false;
     uint64 messagesReceived = 0, lastCountedMessages = 0, angleMessages = 0, lastCountedAngles = 0;
-    uint32 lastAngleTime = 0;
+    uint32 lastAngleTime = 0, pluginLoadedTime = 0;
 
     Dot statusDot;
     Label statusLabel, detailLabel;

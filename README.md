@@ -136,11 +136,22 @@ The app is not commercially code-signed, so the system warns once:
 - **Mac:** a warning appears on first launch. Then go to
   *System Settings → Privacy & Security* and click **"Open Anyway"** at the bottom.
 
+## Status display
+
+The line at the top left only speaks up when something needs doing. With a **green dot**
+everything works and it shows what you cannot see elsewhere: sample rate, input format and total
+latency, below that the tracker rate (with head tracking on), the audio route and the buffer size.
+A **yellow or red dot** replaces it with the problem and what to do. The switches below are not
+repeated there.
+
 ## Troubleshooting
 
 - **Red "port in use":** another program listens on port 9000 (e.g. Virtuoso standalone with OSC
   head tracking). Close it – the app connects automatically.
-- **Yellow "no yaw/pitch/roll":** Bridgehead uses another profile → choose **IEM Scene Rotator YPR**.
+- **Yellow "no head tracking data":** nothing arrives on the port – start your head tracker app
+  (Bridgehead: profile **IEM Scene Rotator YPR**) or turn head tracking off.
+- **Yellow "no yaw/pitch/roll":** messages arrive but in another format – send
+  `/SceneRotator/yaw`, `/pitch`, `/roll` (Bridgehead: profile **IEM Scene Rotator YPR**).
 - **No sound:** check the channels in **Audio settings...** and, on the Mac, microphone access in
   *System Settings → Privacy & Security → Microphone*.
 - **Settings are portable:** they are stored in `Head Tracking Host.settings` **next to the program**
