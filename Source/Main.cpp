@@ -397,6 +397,142 @@ private:
 };
 
 //==============================================================================
+// Apple-style palette (dark appearance).
+namespace ui
+{
+const Colour window    (0xff1e1e1e);
+const Colour group     (0xff2a2a2a);
+const Colour separator (0xff3a3a3c);
+const Colour label     (0xfff2f2f2);
+const Colour secondary (0xffa1a1a6);
+const Colour accent    (0xff0a84ff);
+const Colour green     (0xff30d158);
+const Colour yellow    (0xffffd60a);
+const Colour red       (0xffff453a);
+}
+
+// Twelve input level meters (green, yellow, red), fed with peak values from the audio thread.
+class LevelMeters : public Component, private Timer
+{
+public:
+    static constexpr int numMeters = 12;
+    std::function<float (int)> takePeak;   // returns and resets the latest peak for a channel
+    StringArray names;                     // names of the active channels
+
+    LevelMeters() { startTimerHz (30); }
+
+    void paint (Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat();
+        const float labelH = 14.0f, gap = 4.0f;
+        const float barW = (r.getWidth() - gap * (numMeters - 1)) / numMeters;
+        auto bars = r.withTrimmedBottom (labelH + 2.0f);
+        for (int i = 0; i < numMeters; ++i)
+        {
+            const float x = r.getX() + i * (barW + gap);
+            const bool active = i < names.size();
+            Rectangle<float> bar (x, bars.getY(), barW, bars.getHeight());
+            g.setColour (ui::separator.withAlpha (active ? 1.0f : 0.4f));
+            g.fillRoundedRectangle (bar, 2.0f);
+            if (active && display[(size_t) i] > 0.0f)
+            {
+                // -60 dB .. 0 dB
+                const float db = Decibels::gainToDecibels (display[(size_t) i], -60.0f);
+                const float level = jlimit (0.0f, 1.0f, (db + 60.0f) / 60.0f);
+                auto fill = bar.withTop (bar.getBottom() - bar.getHeight() * level);
+                g.setColour (db > -3.0f ? ui::red : db > -12.0f ? ui::yellow : ui::green);
+                g.fillRoundedRectangle (fill, 2.0f);
+            }
+            g.setColour (active ? ui::secondary : ui::secondary.withAlpha (0.35f));
+            g.setFont (FontOptions (10.0f));
+            g.drawText (active ? names[i] : String (i + 1), (int) x - 4, (int) (r.getBottom() - labelH),
+                        (int) barW + 8, (int) labelH, Justification::centred);
+        }
+    }
+
+private:
+    void timerCallback() override
+    {
+        if (! takePeak || ! isShowing())
+            return;
+        for (int i = 0; i < numMeters; ++i)
+            display[(size_t) i] = jmax (takePeak (i), display[(size_t) i] * 0.85f);
+        repaint();
+    }
+
+    std::array<float, numMeters> display {};
+};
+
+// Top view of the head that turns with the tracked yaw, plus the three angles.
+class HeadIndicator : public Component, private Timer
+{
+public:
+    std::function<std::array<float, 3>()> getAngles;   // yaw, pitch, roll in degrees
+
+    HeadIndicator() { startTimerHz (30); }
+
+    void paint (Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat();
+        auto circleArea = r.removeFromLeft (r.getHeight()).reduced (6.0f);
+        const auto c = circleArea.getCentre();
+        const float radius = circleArea.getWidth() * 0.5f;
+
+        g.setColour (ui::separator);
+        g.drawEllipse (circleArea, 1.0f);
+        g.setColour (ui::secondary.withAlpha (0.6f));
+        g.setFont (FontOptions (9.0f));
+        g.drawText ("front", (int) (c.x - 20), (int) circleArea.getY() - 1, 40, 10, Justification::centred);
+
+        // head: circle + nose, rotated by yaw (positive yaw = turned left)
+        const float angle = -degreesToRadians (angles[0]);
+        Path head;
+        head.addEllipse (-radius * 0.40f, -radius * 0.46f, radius * 0.80f, radius * 0.92f);
+        Path nose;
+        nose.addTriangle (-radius * 0.16f, -radius * 0.40f, radius * 0.16f, -radius * 0.40f, 0.0f, -radius * 0.72f);
+        const auto t = AffineTransform::rotation (angle).translated (c);
+        head.applyTransform (t);
+        nose.applyTransform (t);
+        g.setColour (ui::accent);
+        g.fillPath (head);
+        g.setColour (ui::label);
+        g.fillPath (nose);
+
+        g.setColour (ui::label);
+        g.setFont (FontOptions (12.0f));
+        auto text = r.reduced (10.0f, 0.0f);
+        const char* names[] = { "Yaw", "Pitch", "Roll" };
+        for (int i = 0; i < 3; ++i)
+        {
+            auto line = text.removeFromTop (text.getHeight() / (float) (3 - i));
+            g.setColour (ui::secondary);
+            g.drawText (names[i], line.removeFromLeft (44.0f), Justification::centredLeft);
+            g.setColour (ui::label);
+            g.drawText (String (angles[(size_t) i], 0) + String::fromUTF8 ("\xc2\xb0"), line, Justification::centredLeft);
+        }
+    }
+
+private:
+    void timerCallback() override
+    {
+        if (getAngles && isShowing())
+        {
+            angles = getAngles();
+            repaint();
+        }
+    }
+
+    std::array<float, 3> angles {};
+};
+
+// Scrollable sidebar content; the owner paints the grouped sections.
+struct SidebarContent : public Component
+{
+    std::function<void (Graphics&)> onPaint;
+    void paint (Graphics& g) override { if (onPaint) onPaint (g); }
+};
+
+//==============================================================================
 // Runs the plugin on the audio thread.
 class HostEngine : public AudioIODeviceCallback
 {
@@ -416,6 +552,8 @@ public:
         for (int i = 0; i < maxChannels; ++i)
             downmix[(size_t) i] = i < (int) gains.size() ? gains[(size_t) i] : std::pair<float, float> { 0.0f, 0.0f };
     }
+
+    float takeInputPeak (int ch) { return isPositiveAndBelow (ch, 12) ? inputPeaks[(size_t) ch].exchange (0.0f) : 0.0f; }
 
     void setInputSource (int pluginChannel, int deviceChannel)
     {
@@ -489,6 +627,14 @@ public:
                 FloatVectorOperations::copy (block.getWritePointer (ch), inputs[src], numSamples);
             else
                 block.clear (ch, 0, numSamples);
+        }
+
+        // Input meters: peak per routed plugin input channel.
+        for (int ch = 0; ch < jmin (12, pluginIns, channels); ++ch)
+        {
+            const float peak = block.getMagnitude (ch, 0, numSamples);
+            if (peak > inputPeaks[(size_t) ch].load())
+                inputPeaks[(size_t) ch] = peak;
         }
 
         if (! usePlugin)
@@ -573,6 +719,7 @@ private:
     AudioPluginInstance* plugin = nullptr;
     std::atomic<bool> muted { false }, speakerSimulation { true }, deviceError { false };
     std::atomic<int> dryChannels { 8 };
+    std::array<std::atomic<float>, 12> inputPeaks {};
     HeadphoneEq headphoneEq;
     std::atomic<uint32> callbackCount { 0 };
     std::array<std::pair<float, float>, maxChannels> downmix {};
@@ -610,25 +757,27 @@ public:
         settings->saveIfNeeded();
         setSize (minWidth, barHeight + 360);
 
-        addAndMakeVisible (statusDot);
-        addAndMakeVisible (statusLabel);
-        addAndMakeVisible (detailLabel);
-        statusLabel.setFont (FontOptions (15.0f, Font::bold));
-        detailLabel.setFont (FontOptions (13.0f));
-        detailLabel.setColour (Label::textColourId, Colours::lightgrey);
+        sidebar.addAndMakeVisible (statusDot);
+        sidebar.addAndMakeVisible (statusLabel);
+        sidebar.addAndMakeVisible (detailLabel);
+        statusLabel.setFont (FontOptions (14.0f, Font::bold));
+        statusLabel.setColour (Label::textColourId, ui::label);
+        detailLabel.setFont (FontOptions (12.0f));
+        detailLabel.setColour (Label::textColourId, ui::secondary);
+        detailLabel.setJustificationType (Justification::topLeft);
 
         // Row 2: plugin, audio, port, input layout
         // (plugin label replaced by the card caption)
-        addAndMakeVisible (pluginBox);
+        sidebar.addAndMakeVisible (pluginBox);
         pluginBox.setTextWhenNothingSelected ("Choose a plugin...");
         pluginBox.onChange = [this] { pluginBoxChanged(); };
-        addAndMakeVisible (browseButton);
+        sidebar.addAndMakeVisible (browseButton);
         browseButton.onClick = [this] { browseForPlugin(); };
-        addAndMakeVisible (audioButton);
+        sidebar.addAndMakeVisible (audioButton);
         audioButton.onClick = [this] { showAudioSettings(); };
 
-        addAndMakeVisible (portLabel);
-        addAndMakeVisible (portEditor);
+        // (portLabel drawn by the sidebar)
+        sidebar.addAndMakeVisible (portEditor);
         portEditor.setInputRestrictions (5, "0123456789");
         portEditor.setJustification (Justification::centred);
         // One-time switch from the earlier default (port 8000, DaVinci Resolve profile) to IEM (9000).
@@ -658,8 +807,8 @@ public:
         }
         portEditor.onReturnKey = portEditor.onFocusLost = [this] { applyPort(); };
 
-        addAndMakeVisible (layoutLabel);
-        addAndMakeVisible (layoutBox);
+        // (layoutLabel drawn by the sidebar)
+        sidebar.addAndMakeVisible (layoutBox);
         int id = 1;
         for (auto& l : inputLayouts())
             layoutBox.addItem (l.name, id++);
@@ -667,9 +816,8 @@ public:
                                         dontSendNotification);
         layoutBox.onChange = [this] { settings->setValue ("layout", layoutBox.getSelectedItemIndex()); applyLayout(); };
 
-        addAndMakeVisible (speakerSimButton);
+        sidebar.addAndMakeVisible (speakerSimButton);
         speakerSimButton.getProperties().set ("switch", true);
-        speakerSimButton.setButtonText ("Speaker simulation");
         speakerSimButton.setTooltip ("Off: hear the input without the plugin (surround is downmixed to stereo) - e.g. for A/B comparisons.");
         speakerSimButton.setToggleState (settings->getBoolValue ("speakerSim", true), dontSendNotification);
         engine.setSpeakerSimulation (speakerSimButton.getToggleState());
@@ -679,19 +827,18 @@ public:
             settings->setValue ("speakerSim", speakerSimButton.getToggleState());
         };
 
-        addAndMakeVisible (channelsButton);
+        sidebar.addAndMakeVisible (channelsButton);
         channelsButton.onClick = [this] { showChannelRouting(); };
         channelsButton.setTooltip ("Choose which audio input feeds each plugin channel.");
         loadInputMap();
 
         // Headphone correction (AutoEq profiles; global, works with or without speaker simulation)
-        addAndMakeVisible (autoEqButton);
+        sidebar.addAndMakeVisible (autoEqButton);
         autoEqButton.getProperties().set ("switch", true);
-        autoEqButton.setButtonText ("Headphone correction");
         autoEqButton.setTooltip ("AutoEq headphone correction - works with or without speaker simulation.");
         autoEqButton.setToggleState (settings->getBoolValue ("autoeqEnabled", false), dontSendNotification);
         autoEqButton.onClick = [this] { settings->setValue ("autoeqEnabled", autoEqButton.getToggleState()); applyAutoEq(); };
-        addAndMakeVisible (autoEqSlotBox);
+        sidebar.addAndMakeVisible (autoEqSlotBox);
         refreshAutoEqSlots();
         autoEqSlotBox.setSelectedItemIndex (jlimit (0, numEqSlots - 1, settings->getIntValue ("autoeqSlot", 0)), dontSendNotification);
         autoEqSlotBox.onChange = [this]
@@ -700,15 +847,14 @@ public:
             applyAutoEq();
             notifyHeadphoneWindow();
         };
-        addAndMakeVisible (autoEqSearchButton);
+        sidebar.addAndMakeVisible (autoEqSearchButton);
         autoEqSearchButton.onClick = [this] { showHeadphoneWindow(); };
         autoEqSearchButton.setTooltip ("Headphone correction: slots, curve, database search and file import.");
         applyAutoEq();
         updateDownmix(); // dry path is ready even before a plugin is loaded
 
-        addAndMakeVisible (trackingButton);
+        sidebar.addAndMakeVisible (trackingButton);
         trackingButton.getProperties().set ("switch", true);
-        trackingButton.setButtonText ("Head tracking");
         trackingButton.setTooltip ("Off: stops listening to Bridgehead, frees the port and sets Yaw/Pitch/Roll to 0 degrees.");
         trackingButton.setToggleState (settings->getBoolValue ("headTracking", true), dontSendNotification);
         trackingButton.onClick = [this] { setHeadTracking (trackingButton.getToggleState()); };
@@ -718,20 +864,51 @@ public:
         {
             axisLabels[i].setText (String (axisNames[i]) + ":", dontSendNotification);
             axisLabels[i].setJustificationType (Justification::centredRight);
-            addAndMakeVisible (axisLabels[i]);
+            // (axisLabels[i] drawn by the sidebar)
 
             axisBoxes[i].setTextWhenNothingSelected ("- none -");
             axisBoxes[i].onChange = [this, i] { axisBoxChanged (i); };
-            addAndMakeVisible (axisBoxes[i]);
+            sidebar.addAndMakeVisible (axisBoxes[i]);
 
             invertButtons[i].setButtonText ("Invert");
             invertButtons[i].onClick = [this, i] { settings->setValue (pluginKey (String ("invert") + axisNames[i]),
                                                                        invertButtons[i].getToggleState()); };
-            addAndMakeVisible (invertButtons[i]);
+            sidebar.addAndMakeVisible (invertButtons[i]);
         }
 
+        // Plugin area: scrolls when the window is smaller than the plugin, centres it otherwise.
         addAndMakeVisible (viewport);
         viewport.setScrollBarsShown (true, true, true, true);
+        viewport.setViewedComponent (&pluginHolder, false);
+
+        // Sidebar (System Settings style), scrollable on small screens.
+        addAndMakeVisible (sidebarViewport);
+        sidebarViewport.setViewedComponent (&sidebar, false);
+        sidebarViewport.setScrollBarsShown (true, false);
+        sidebar.onPaint = [this] (Graphics& g) { paintSidebar (g); };
+
+        sidebar.addAndMakeVisible (zoomBox);
+        for (int z : { 75, 100, 125, 150 })
+            zoomBox.addItem (String (z) + " %", z);
+        zoomBox.setSelectedId (100, dontSendNotification);
+        zoomBox.setTooltip ("Plugin zoom - works with plugins that support scaling.");
+        zoomBox.onChange = [this] { applyZoom(); };
+
+        sidebar.addAndMakeVisible (indicatorButton);
+        indicatorButton.getProperties().set ("switch", true);
+        indicatorButton.setToggleState (settings->getBoolValue ("headIndicator", true), dontSendNotification);
+        indicatorButton.onClick = [this]
+        {
+            settings->setValue ("headIndicator", indicatorButton.getToggleState());
+            headIndicator.setVisible (indicatorButton.getToggleState());
+            resized();
+        };
+        sidebar.addChildComponent (headIndicator);
+        headIndicator.setVisible (indicatorButton.getToggleState());
+        headIndicator.getAngles = [this] { return lastAngles; };
+
+        sidebar.addAndMakeVisible (meters);
+        meters.takePeak = [this] (int ch) { return engine.takeInputPeak (ch); };
 
         deviceManager.addChangeListener (this);
         deviceManager.addAudioCallback (&engine);
@@ -804,80 +981,142 @@ public:
 
     void paint (Graphics& g) override
     {
-        g.fillAll (Colours::black);
-        g.setColour (panel);
-        g.fillRect (getLocalBounds().removeFromTop (barHeight));
+        g.fillAll (ui::window);
+        g.setColour (ui::separator);
+        g.drawVerticalLine (sidebarWidth, 0.0f, (float) getHeight());
+    }
 
-        static const char* captions[] = { "PLUGIN & AUDIO", "HEAD TRACKING", "OUTPUT" };
-        for (int i = 0; i < 3; ++i)
+    void paintSidebar (Graphics& g)
+    {
+        g.fillAll (ui::window);
+        for (auto& r : sidebarGroups)
         {
-            g.setColour (Colour (0xff303030));
-            g.fillRoundedRectangle (cards[i].toFloat(), 8.0f);
-            g.setColour (Colours::grey);
-            g.setFont (FontOptions (11.0f, Font::bold));
-            g.drawText (captions[i], cards[i].withWidth (captionWidth).withTrimmedLeft (12).withHeight (40),
-                        Justification::centredLeft);
+            g.setColour (ui::group);
+            g.fillRoundedRectangle (r.toFloat(), 10.0f);
         }
+        for (auto& t : sidebarTexts)
+        {
+            g.setColour (t.header ? ui::secondary : ui::label);
+            g.setFont (t.header ? FontOptions (11.0f, Font::bold) : FontOptions (13.0f));
+            g.drawText (t.text, t.area, Justification::centredLeft);
+        }
+        // row separators inside groups
+        g.setColour (ui::separator);
+        for (auto& r : rowSeparators)
+            g.drawHorizontalLine (r.getY(), (float) r.getX(), (float) r.getRight());
+    }
+
+    // Lays out the sidebar as grouped rows: label left, control right.
+    int layoutSidebar (int width)
+    {
+        sidebarTexts.clear();
+        sidebarGroups.clear();
+        rowSeparators.clear();
+        const int pad = 14, rowH = 34, inset = 12;
+        int y = 14;
+
+        auto status = Rectangle<int> (pad, y, width - 2 * pad, 22);
+        statusDot.setBounds (status.removeFromLeft (18));
+        statusLabel.setBounds (status);
+        y += 22;
+        detailLabel.setBounds (pad, y, width - 2 * pad, 34);
+        y += 42;
+
+        Rectangle<int> group;
+        auto beginGroup = [&] (const String& title)
+        {
+            sidebarTexts.push_back ({ { pad + 4, y, width - 2 * pad, 18 }, title, true });
+            y += 20;
+            group = { pad, y, width - 2 * pad, 0 };
+        };
+        auto endGroup = [&]
+        {
+            group.setBottom (y);
+            sidebarGroups.push_back (group);
+            y += 14;
+        };
+        auto row = [&] (const String& label, int labelWidth = 110) -> Rectangle<int>
+        {
+            if (y > group.getY())
+                rowSeparators.push_back ({ group.getX() + inset, y, group.getWidth() - inset, 1 });
+            auto r = Rectangle<int> (group.getX() + inset, y, group.getWidth() - 2 * inset, rowH);
+            if (label.isNotEmpty())
+                sidebarTexts.push_back ({ r.removeFromLeft (labelWidth), label, false });
+            y += rowH;
+            return r.reduced (0, 4);
+        };
+        auto switchArea = [] (Rectangle<int> r) { return r.removeFromRight (44); };
+
+        beginGroup ("PLUGIN");
+        pluginBox.setBounds (row (""));
+        {
+            auto r = row ("");
+            browseButton.setBounds (r.removeFromLeft (r.getWidth() / 2 - 3));
+            r.removeFromLeft (6);
+            audioButton.setBounds (r);
+        }
+        layoutBox.setBounds (row ("Input"));
+        channelsButton.setBounds (row ("Channels"));
+        zoomBox.setBounds (row ("Plugin zoom"));
+        endGroup();
+
+        beginGroup ("HEAD TRACKING");
+        trackingButton.setBounds (switchArea (row ("Head tracking", 200)));
+        portEditor.setBounds (row ("Bridgehead port").removeFromRight (80));
+        const char* axes[] = { "Yaw", "Pitch", "Roll" };
+        for (size_t i = 0; i < 3; ++i)
+        {
+            auto r = row (axes[i], 48);
+            invertButtons[i].setBounds (r.removeFromRight (70));
+            r.removeFromRight (6);
+            axisBoxes[i].setBounds (r);
+        }
+        indicatorButton.setBounds (switchArea (row ("Head indicator", 200)));
+        if (indicatorButton.getToggleState())
+        {
+            headIndicator.setBounds (group.getX() + inset, y, group.getWidth() - 2 * inset, 92);
+            y += 96;
+        }
+        endGroup();
+
+        beginGroup ("OUTPUT");
+        speakerSimButton.setBounds (switchArea (row ("Speaker simulation", 200)));
+        autoEqButton.setBounds (switchArea (row ("Headphone correction", 200)));
+        {
+            auto r = row ("");
+            autoEqSearchButton.setBounds (r.removeFromRight (64));
+            r.removeFromRight (6);
+            autoEqSlotBox.setBounds (r);
+        }
+        endGroup();
+
+        beginGroup ("INPUT LEVELS");
+        meters.names = pluginChannelNames();
+        meters.setBounds (group.getX() + inset, y + 10, group.getWidth() - 2 * inset, 96);
+        y += 116;
+        endGroup();
+
+        return y;
+    }
+
+    void layoutPluginArea()
+    {
+        const int w = jmax (viewport.getMaximumVisibleWidth(), editor != nullptr ? editor->getWidth() : 0);
+        const int h = jmax (viewport.getMaximumVisibleHeight(), editor != nullptr ? editor->getHeight() : 0);
+        pluginHolder.setSize (w, h);
+        if (editor != nullptr)
+            editor->setTopLeftPosition ((w - editor->getWidth()) / 2, (h - editor->getHeight()) / 2);
     }
 
     void resized() override
     {
         auto area = getLocalBounds();
-        auto bar = area.removeFromTop (barHeight).reduced (14, 10);
-
-        auto row1 = bar.removeFromTop (24);
-        statusDot.setBounds (row1.removeFromLeft (20));
-        statusLabel.setBounds (row1);
-        detailLabel.setBounds (bar.removeFromTop (22));
-        bar.removeFromTop (8);
-
-        auto inner = [] (Rectangle<int> card) { return card.withTrimmedLeft (captionWidth).reduced (8, 6); };
-
-        // Card 1: plugin & audio
-        cards[0] = bar.removeFromTop (40);
-        auto r = inner (cards[0]);
-        pluginBox.setBounds (r.removeFromLeft (200).reduced (0, 0));
-        r.removeFromLeft (6);
-        browseButton.setBounds (r.removeFromLeft (76));
-        r.removeFromLeft (10);
-        audioButton.setBounds (r.removeFromLeft (124));
-        r.removeFromLeft (14);
-        layoutLabel.setBounds (r.removeFromLeft (40));
-        layoutBox.setBounds (r.removeFromLeft (150));
-        r.removeFromLeft (10);
-        channelsButton.setBounds (r);
-        bar.removeFromTop (8);
-
-        // Card 2: head tracking (switch + port, then yaw / pitch / roll)
-        cards[1] = bar.removeFromTop (76);
-        r = inner (cards[1]);
-        auto top = r.removeFromTop (28);
-        trackingButton.setBounds (top.removeFromLeft (160));
-        top.removeFromLeft (20);
-        portLabel.setBounds (top.removeFromLeft (110));
-        portEditor.setBounds (top.removeFromLeft (60));
-        r.removeFromTop (6);
-        const int column = r.getWidth() / 3;
-        for (size_t i = 0; i < 3; ++i)
-        {
-            auto c = r.removeFromLeft (column).withTrimmedRight (10);
-            axisLabels[i].setBounds (c.removeFromLeft (44));
-            invertButtons[i].setBounds (c.removeFromRight (66));
-            axisBoxes[i].setBounds (c.withTrimmedRight (4));
-        }
-        bar.removeFromTop (8);
-
-        // Card 3: output (speaker simulation, headphone correction)
-        cards[2] = bar.removeFromTop (40);
-        r = inner (cards[2]);
-        speakerSimButton.setBounds (r.removeFromLeft (180));
-        r.removeFromLeft (10);
-        autoEqButton.setBounds (r.removeFromLeft (196));
-        autoEqSearchButton.setBounds (r.removeFromRight (100));
-        r.removeFromRight (6);
-        autoEqSlotBox.setBounds (r);
-
+        sidebarViewport.setBounds (area.removeFromLeft (sidebarWidth));
+        const int contentWidth = sidebarWidth - (sidebarViewport.isVerticalScrollBarShown() ? sidebarViewport.getScrollBarThickness() : 0);
+        sidebar.setSize (contentWidth, layoutSidebar (contentWidth));
+        area.removeFromLeft (1);
         viewport.setBounds (area);
+        layoutPluginArea();
     }
 
 private:
@@ -885,31 +1124,27 @@ private:
     // Window size follows the plugin editor, limited to the screen.
     void updateSize()
     {
-        int w = minWidth, h = 360;
-        if (editor != nullptr)
-        {
-            w = jmax (minWidth, editor->getWidth());
-            h = editor->getHeight();
-        }
+        const int wantW = sidebarWidth + 1 + (editor != nullptr ? editor->getWidth() : 600);
+        const int wantH = jmax (680, editor != nullptr ? editor->getHeight() : 0);
 
         auto screen = Desktop::getInstance().getDisplays().getPrimaryDisplay()->userArea;
         if (auto* top = getTopLevelComponent(); top != nullptr && top->isOnDesktop())
             if (auto* d = Desktop::getInstance().getDisplays().getDisplayForRect (top->getScreenBounds()))
                 screen = d->userArea;
 
-        const int maxW = screen.getWidth() - 20;
-        const int maxH = screen.getHeight() - 60; // room for the title bar
-        const int width  = jmin (w, maxW);
-        int height = jmin (barHeight + h, maxH);
-        if (width < w && height < maxH)
-            height = jmin (height + viewport.getScrollBarThickness(), maxH);
-        setSize (width, height);
+        // Grow to show the whole plugin if it fits on screen; never shrink a window the user sized.
+        setSize (jlimit (getWidth(), jmax (getWidth(), screen.getWidth() - 20), wantW),
+                 jlimit (getHeight(), jmax (getHeight(), screen.getHeight() - 60), wantH));
+        layoutPluginArea();
     }
 
     void componentMovedOrResized (Component& c, bool, bool wasResized) override
     {
         if (&c == editor.get() && wasResized)
+        {
             updateSize();
+            layoutPluginArea();
+        }
     }
 
     //==============================================================================
@@ -982,7 +1217,7 @@ private:
         if (editor != nullptr)
         {
             editor->removeComponentListener (this);
-            viewport.setViewedComponent (nullptr, false);
+            pluginHolder.removeChildComponent (editor.get());
             editor.reset();
         }
         plugin.reset();
@@ -1046,7 +1281,9 @@ private:
             editor.reset (plugin->createEditorIfNeeded());
             if (editor != nullptr)
             {
-                viewport.setViewedComponent (editor.get(), false);
+                pluginHolder.addAndMakeVisible (*editor);
+                zoomBox.setSelectedId (settings->getIntValue (pluginKey ("zoom"), 100), dontSendNotification);
+                applyZoom();
                 editor->addComponentListener (this);
             }
         }
@@ -1104,6 +1341,18 @@ private:
         if (gains.empty())
             gains = { { 1.0f, 0.0f }, { 0.0f, 1.0f } };
         engine.setDownmixGains (gains);
+        meters.names = names;
+        meters.repaint();
+    }
+
+    void applyZoom()
+    {
+        const int z = zoomBox.getSelectedId() > 0 ? zoomBox.getSelectedId() : 100;
+        if (plugin != nullptr)
+            settings->setValue (pluginKey ("zoom"), z);
+        if (editor != nullptr)
+            editor->setScaleFactor ((float) z / 100.0f);
+        layoutPluginArea();
     }
 
     void applyLayout()
@@ -1280,6 +1529,7 @@ private:
                 // Normal orientation = IEM Scene Rotator / Virtuoso convention. The IEM profile's
                 // roll is flipped relative to that convention, pitch already matches.
                 applyAxis (i, i == 2 ? -value : value);
+                lastAngles[i] = i == 2 ? -value : value;
             }
         }
     }
@@ -1626,7 +1876,7 @@ private:
         o.dialogBackgroundColour = panel;
         o.escapeKeyTriggersCloseButton = true;
         o.useNativeTitleBar = true;
-        o.resizable = false;
+        o.resizable = true;
         o.launchAsync();
     }
 
@@ -1796,7 +2046,7 @@ private:
         o.dialogBackgroundColour = panel;
         o.escapeKeyTriggersCloseButton = true;
         o.useNativeTitleBar = true;
-        o.resizable = false;
+        o.resizable = true;
         o.launchAsync();
     }
 
@@ -2025,7 +2275,7 @@ private:
         o.dialogBackgroundColour = panel;
         o.escapeKeyTriggersCloseButton = true;
         o.useNativeTitleBar = true;
-        o.resizable = false;
+        o.resizable = true;
         o.launchAsync();
     }
 
@@ -2040,7 +2290,7 @@ private:
         o.dialogBackgroundColour = panel;
         o.escapeKeyTriggersCloseButton = true;
         o.useNativeTitleBar = true;
-        o.resizable = false;
+        o.resizable = true;
         o.launchAsync();
     }
 
@@ -2087,6 +2337,18 @@ private:
     ToggleButton trackingButton, autoEqButton;
     ComboBox autoEqSlotBox;
     TextButton autoEqSearchButton { "Edit..." };
+    SidebarContent sidebar;
+    Viewport sidebarViewport;
+    Component pluginHolder;
+    ComboBox zoomBox;
+    ToggleButton indicatorButton;
+    HeadIndicator headIndicator;
+    LevelMeters meters;
+    std::array<float, 3> lastAngles {};
+    struct SidebarText { Rectangle<int> area; String text; bool header; };
+    std::vector<SidebarText> sidebarTexts;
+    std::vector<Rectangle<int>> sidebarGroups, rowSeparators;
+    static constexpr int sidebarWidth = 320;
     Rectangle<int> cards[3];
     static constexpr int captionWidth = 112;
     std::vector<int> inputMap; // device input channel for each plugin input channel, -1 = off
@@ -2106,7 +2368,28 @@ private:
 class HostLookAndFeel : public LookAndFeel_V4
 {
 public:
-    HostLookAndFeel() : LookAndFeel_V4 (LookAndFeel_V4::getDarkColourScheme()) {}
+    HostLookAndFeel()
+        : LookAndFeel_V4 (LookAndFeel_V4::ColourScheme (0xff1e1e1e, 0xff2c2c2e, 0xff2c2c2e, 0xff3a3a3c, 0xfff2f2f2,
+                                                        0xff0a84ff, 0xffffffff, 0xff0a84ff, 0xfff2f2f2))
+    {
+       #if JUCE_WINDOWS
+        setDefaultSansSerifTypefaceName ("Segoe UI");
+       #elif JUCE_MAC
+        setDefaultSansSerifTypefaceName ("Helvetica Neue");
+       #endif
+        setColour (TextButton::buttonColourId, Colour (0xff3a3a3c));
+        setColour (ComboBox::backgroundColourId, Colour (0xff3a3a3c));
+        setColour (ComboBox::outlineColourId, Colours::transparentBlack);
+        setColour (TextEditor::backgroundColourId, Colour (0xff3a3a3c));
+        setColour (TextEditor::outlineColourId, Colours::transparentBlack);
+        setColour (ToggleButton::tickColourId, ui::accent);
+        setColour (ScrollBar::thumbColourId, Colour (0xff5a5a5e));
+    }
+
+    int getDefaultScrollbarWidth() override { return 10; }
+    Font getComboBoxFont (ComboBox&) override { return FontOptions (13.0f); }
+    Font getTextButtonFont (TextButton&, int) override { return FontOptions (13.0f); }
+    Font getPopupMenuFont() override { return FontOptions (13.0f); }
 
     void drawToggleButton (Graphics& g, ToggleButton& b, bool highlighted, bool down) override
     {
@@ -2118,7 +2401,7 @@ public:
         const bool on = b.getToggleState();
         auto bounds = b.getLocalBounds().toFloat();
         auto track = bounds.removeFromLeft (38.0f).withSizeKeepingCentre (38.0f, 20.0f);
-        g.setColour (on ? Colour (0xff1f9d55) : Colour (0xff5a5a5a));
+        g.setColour (on ? ui::green : Colour (0xff48484a));
         g.fillRoundedRectangle (track, 10.0f);
         const float knob = 16.0f;
         const float x = on ? track.getRight() - knob - 2.0f : track.getX() + 2.0f;
@@ -2159,8 +2442,9 @@ public:
             : DocumentWindow (name, Colours::black, DocumentWindow::closeButton | DocumentWindow::minimiseButton)
         {
             setUsingNativeTitleBar (true);
-            setResizable (false, false);
-            setContentOwned (new MainComponent(), true); // window follows the content size
+            setContentOwned (new MainComponent(), true); // grows to fit the plugin when it is loaded
+            setResizable (true, false);
+            setResizeLimits (720, 480, 20000, 20000);
             centreWithSize (getWidth(), getHeight());
             setVisible (true);
         }

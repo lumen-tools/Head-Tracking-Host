@@ -53,6 +53,18 @@ all settings stay.
 **Without head tracking:** untick **Head tracking**. The app stops listening to Bridgehead,
 frees the port, sets Yaw/Pitch/Roll to 0° and leaves the plugin's knobs to you.
 
+## Window
+
+- **Sidebar** on the left with all settings in groups (Plugin, Head tracking, Output, Input levels);
+  the plugin's own interface on the right.
+- **All windows can be resized.** If the window is smaller than the plugin, scroll horizontally and
+  vertically; if it is larger, the plugin is centred. **Plugin zoom** (75–150 %) works with plugins
+  that support scaling.
+- **Input levels:** twelve meters show the audio going into the plugin (after channel routing);
+  unused channels are dimmed.
+- **Head indicator:** a top view of your head that turns with you, plus yaw, pitch and roll.
+  Switch it off if the plugin has its own (e.g. Virtuoso).
+
 ## Two switches: speaker simulation and headphone correction
 
 - **Speaker simulation** – on: the plugin (e.g. Virtuoso) renders your speakers. Off: you hear the
