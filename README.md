@@ -58,8 +58,8 @@ frees the port, sets Yaw/Pitch/Roll to 0° and leaves the plugin's knobs to you.
 - **Speaker simulation** – on: the plugin (e.g. Virtuoso) renders your speakers. Off: you hear the
   input without the plugin (surround downmixed to stereo) – handy for A/B comparisons.
 - **Headphone correction** – AutoEq correction for your headphones, on or off. It works **with or
-  without** speaker simulation, and even without any plugin loaded – then Head Tracking Host is a
-  system-wide headphone EQ. For stereo sources set **Input** to **Stereo** (the 7.1 downmix is a bit
+  without** speaker simulation, and even without any plugin – choose **(none - headphone correction
+  only)** in the plugin list, then Head Tracking Host is a system-wide headphone EQ. For stereo sources set **Input** to **Stereo** (the 7.1 downmix is a bit
   quieter to avoid clipping).
 
 Don't combine headphone correction with a plugin's own headphone correction (e.g. Virtuoso's HPC EQ),
@@ -68,11 +68,11 @@ otherwise the headphones are corrected twice.
 ### Headphone correction window
 
 Click **Headphone correction...**:
-- **Three slots** store profiles offline; the dropdown (here or in the main window) picks the active one.
+- **Five slots** store profiles offline; the dropdown (here or in the main window) picks the active one.
 - **Find in database...** searches the [AutoEq](https://github.com/jaakkopasanen/AutoEq) database
   (internet needed only for searching, the list is cached). By default it shows the **recommended
   measurement** per headphone; tick **Show all measurements** to see every source
-  (oratory1990, crinacle, Rtings ...). Select a headphone and click **Save to slot 1/2/3**.
+  (oratory1990, crinacle, Rtings ...). Select a headphone and click a slot number (**1–5**) next to *Save to slot*.
 - **Import file...** loads an AutoEq **ParametricEQ.txt** into the selected slot – download it from
   autoeq.app or the AutoEq GitHub page (same format as Equalizer APO). No internet needed afterwards.
 - **Clear slot** empties it. The **curve** shows the correction of the selected slot.

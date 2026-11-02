@@ -21,6 +21,7 @@ void requestMicrophoneAccess (std::function<void (bool)> callback); // Microphon
 
 namespace
 {
+constexpr int numEqSlots = 5;
 constexpr int defaultOscPort = 9000; // Bridgehead profile "IEM Scene Rotator YPR"
 constexpr int minWidth = 900;
 constexpr int barHeight = 268;
@@ -692,7 +693,7 @@ public:
         autoEqButton.onClick = [this] { settings->setValue ("autoeqEnabled", autoEqButton.getToggleState()); applyAutoEq(); };
         addAndMakeVisible (autoEqSlotBox);
         refreshAutoEqSlots();
-        autoEqSlotBox.setSelectedItemIndex (jlimit (0, 2, settings->getIntValue ("autoeqSlot", 0)), dontSendNotification);
+        autoEqSlotBox.setSelectedItemIndex (jlimit (0, numEqSlots - 1, settings->getIntValue ("autoeqSlot", 0)), dontSendNotification);
         autoEqSlotBox.onChange = [this]
         {
             settings->setValue ("autoeqSlot", autoEqSlotBox.getSelectedItemIndex());
@@ -922,21 +923,40 @@ private:
     {
         installedPlugins = findInstalledPlugins();
         pluginBox.clear (dontSendNotification);
-        int id = 1;
+        pluginBox.addItem ("(none - headphone correction only)", 1);
+        pluginBox.addSeparator();
+        int id = 2;
         for (auto& f : installedPlugins)
             pluginBox.addItem (f.getFileNameWithoutExtension(), id++);
 
-        const File current (settings->getValue ("pluginPath"));
-        const int index = installedPlugins.indexOf (current);
-        if (index >= 0)
-            pluginBox.setSelectedItemIndex (index, dontSendNotification);
+        const auto path = settings->getValue ("pluginPath");
+        const File current (path);
+        const int index = path.isNotEmpty() ? installedPlugins.indexOf (current) : -1;
+        if (path.isEmpty())
+            pluginBox.setSelectedId (1, dontSendNotification);
+        else if (index >= 0)
+            pluginBox.setSelectedId (index + 2, dontSendNotification);
         else if (current.exists())
             pluginBox.setText (current.getFileNameWithoutExtension(), dontSendNotification);
     }
 
     void pluginBoxChanged()
     {
-        const int index = pluginBox.getSelectedItemIndex();
+        const int id = pluginBox.getSelectedId();
+        if (id == 1)
+        {
+            // No plugin: dry signal, e.g. headphone correction only.
+            if (plugin != nullptr)
+                saveState();
+            unloadPlugin();
+            settings->setValue ("pluginPath", String());
+            lastError = {};
+            deviceManager.addAudioCallback (&engine);
+            engine.setMuted (feedbackRisk);
+            updateSize();
+            return;
+        }
+        const int index = id - 2;
         if (isPositiveAndBelow (index, installedPlugins.size()))
             loadPlugin (installedPlugins[index]);
     }
@@ -987,6 +1007,7 @@ private:
         {
             lastError = "Not a usable VST3 plugin: " + file.getFileName();
             deviceManager.addAudioCallback (&engine);
+            checkFeedback(); // unmute again (dry signal keeps playing)
             updateSize();
             return;
         }
@@ -1001,6 +1022,7 @@ private:
         {
             lastError = "Could not load " + file.getFileName() + ": " + error;
             deviceManager.addAudioCallback (&engine);
+            checkFeedback(); // unmute again (dry signal keeps playing)
             updateSize();
             return;
         }
@@ -1616,7 +1638,7 @@ private:
     {
         const int selected = autoEqSlotBox.getSelectedItemIndex();
         autoEqSlotBox.clear (dontSendNotification);
-        for (int i = 0; i < 3; ++i)
+        for (int i = 0; i < numEqSlots; ++i)
         {
             const auto name = settings->getValue (slotKey (i, "name"));
             autoEqSlotBox.addItem ("Slot " + String (i + 1) + ": " + (name.isNotEmpty() ? name : String ("(empty)")), i + 1);
@@ -1690,7 +1712,7 @@ private:
         void refresh()
         {
             slotBox.clear (dontSendNotification);
-            for (int i = 0; i < 3; ++i)
+            for (int i = 0; i < numEqSlots; ++i)
             {
                 const auto name = owner.slotName (i);
                 slotBox.addItem ("Slot " + String (i + 1) + ": " + (name.isNotEmpty() ? name : String ("(empty)")), i + 1);
@@ -1838,9 +1860,12 @@ private:
             list.setRowHeight (24);
             addAndMakeVisible (status);
             status.setColour (Label::textColourId, Colours::lightgrey);
-            for (int i = 0; i < 3; ++i)
+            addAndMakeVisible (saveLabel);
+            saveLabel.setText ("Save to slot:", dontSendNotification);
+            for (int i = 0; i < numEqSlots; ++i)
             {
-                auto* b = saveButtons.add (new TextButton ("Save to slot " + String (i + 1)));
+                auto* b = saveButtons.add (new TextButton (String (i + 1)));
+                b->setTooltip ("Save the selected headphone to slot " + String (i + 1));
                 b->onClick = [this, i] { saveTo (i); };
                 addAndMakeVisible (b);
             }
@@ -1862,10 +1887,11 @@ private:
             showAllButton.setBounds (r.removeFromTop (24).withWidth (240));
             r.removeFromTop (4);
             auto bottom = r.removeFromBottom (28);
+            saveLabel.setBounds (bottom.removeFromLeft (92));
             for (auto* b : saveButtons)
             {
-                b->setBounds (bottom.removeFromLeft (130));
-                bottom.removeFromLeft (8);
+                b->setBounds (bottom.removeFromLeft (44));
+                bottom.removeFromLeft (6);
             }
             refreshButton.setBounds (bottom.removeFromRight (110));
             r.removeFromBottom (6);
@@ -1986,6 +2012,7 @@ private:
         OwnedArray<TextButton> saveButtons;
         TextButton refreshButton { "Refresh list" };
         ToggleButton showAllButton;
+        Label saveLabel;
         std::vector<AutoEqEntry> entries;
         std::vector<int> shown;
     };
