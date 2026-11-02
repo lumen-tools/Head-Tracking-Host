@@ -737,6 +737,27 @@ private:
 };
 
 //==============================================================================
+// Keeps a top-level window (including the system title bar and frame) inside the visible screen
+// area: shrinks it if needed and moves it back on screen. The content scrolls instead.
+void fitWindowToScreen (Component& window)
+{
+    if (! window.isOnDesktop())
+        return;
+    const auto& displays = Desktop::getInstance().getDisplays();
+    const auto* display = displays.getDisplayForRect (window.getScreenBounds());
+    auto usable = (display != nullptr ? display : displays.getPrimaryDisplay())->userArea;
+    if (auto* peer = window.getPeer())
+        if (const auto frame = peer->getFrameSizeIfPresent())
+            usable = frame->subtractedFrom (usable);   // room for the native title bar and frame
+
+    auto b = window.getBounds();
+    b.setSize (jmin (b.getWidth(), usable.getWidth()), jmin (b.getHeight(), usable.getHeight()));
+    b = b.constrainedWithin (usable);
+    if (b != window.getBounds())
+        window.setBounds (b);
+}
+
+//==============================================================================
 class MainComponent : public Component,
                       private OSCReceiver::Listener<OSCReceiver::MessageLoopCallback>,
                       private ComponentListener,
@@ -1132,9 +1153,11 @@ private:
             if (auto* d = Desktop::getInstance().getDisplays().getDisplayForRect (top->getScreenBounds()))
                 screen = d->userArea;
 
-        // Grow to show the whole plugin if it fits on screen; never shrink a window the user sized.
-        setSize (jlimit (getWidth(), jmax (getWidth(), screen.getWidth() - 20), wantW),
-                 jlimit (getHeight(), jmax (getHeight(), screen.getHeight() - 60), wantH));
+        // Grow to show the whole plugin if possible; never shrink a window the user sized.
+        setSize (jlimit (getWidth(), jmax (getWidth(), screen.getWidth()), wantW),
+                 jlimit (getHeight(), jmax (getHeight(), screen.getHeight()), wantH));
+        if (auto* top = getTopLevelComponent())
+            fitWindowToScreen (*top);   // whole window incl. title bar stays on screen; content scrolls
         layoutPluginArea();
     }
 
@@ -2453,6 +2476,10 @@ public:
             setResizeLimits (720, 480, 20000, 20000);
             centreWithSize (getWidth(), getHeight());
             setVisible (true);
+            fitWindowToScreen (*this);
+            // The native frame size is known only after the window is on screen: fit once more.
+            Component::SafePointer<MainWindow> safe (this);
+            MessageManager::callAsync ([safe] { if (safe != nullptr) fitWindowToScreen (*safe); });
         }
 
         void closeButtonPressed() override { JUCEApplication::getInstance()->systemRequestedQuit(); }
