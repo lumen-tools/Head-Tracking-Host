@@ -23,7 +23,7 @@ namespace
 {
 constexpr int defaultOscPort = 9000; // Bridgehead profile "IEM Scene Rotator YPR"
 constexpr int minWidth = 900;
-constexpr int barHeight = 226;
+constexpr int barHeight = 268;
 const String autoEqBase ("https://raw.githubusercontent.com/jaakkopasanen/AutoEq/master/results/");
 const std::array<const char*, 3> axisNames { "Yaw", "Pitch", "Roll" };
 const std::array<float, 3> fallbackRange { 180.0f, 90.0f, 90.0f }; // +/- degrees if the plugin text can't be parsed
@@ -617,7 +617,7 @@ public:
         detailLabel.setColour (Label::textColourId, Colours::lightgrey);
 
         // Row 2: plugin, audio, port, input layout
-        addAndMakeVisible (pluginLabel);
+        // (plugin label replaced by the card caption)
         addAndMakeVisible (pluginBox);
         pluginBox.setTextWhenNothingSelected ("Choose a plugin...");
         pluginBox.onChange = [this] { pluginBoxChanged(); };
@@ -667,6 +667,7 @@ public:
         layoutBox.onChange = [this] { settings->setValue ("layout", layoutBox.getSelectedItemIndex()); applyLayout(); };
 
         addAndMakeVisible (speakerSimButton);
+        speakerSimButton.getProperties().set ("switch", true);
         speakerSimButton.setButtonText ("Speaker simulation");
         speakerSimButton.setTooltip ("Off: hear the input without the plugin (surround is downmixed to stereo) - e.g. for A/B comparisons.");
         speakerSimButton.setToggleState (settings->getBoolValue ("speakerSim", true), dontSendNotification);
@@ -679,12 +680,12 @@ public:
 
         addAndMakeVisible (channelsButton);
         channelsButton.onClick = [this] { showChannelRouting(); };
-        addAndMakeVisible (routingLabel);
-        routingLabel.setColour (Label::textColourId, Colours::lightgrey);
+        channelsButton.setTooltip ("Choose which audio input feeds each plugin channel.");
         loadInputMap();
 
         // Headphone correction (AutoEq profiles; global, works with or without speaker simulation)
         addAndMakeVisible (autoEqButton);
+        autoEqButton.getProperties().set ("switch", true);
         autoEqButton.setButtonText ("Headphone correction");
         autoEqButton.setTooltip ("AutoEq headphone correction - works with or without speaker simulation.");
         autoEqButton.setToggleState (settings->getBoolValue ("autoeqEnabled", false), dontSendNotification);
@@ -700,10 +701,12 @@ public:
         };
         addAndMakeVisible (autoEqSearchButton);
         autoEqSearchButton.onClick = [this] { showHeadphoneWindow(); };
+        autoEqSearchButton.setTooltip ("Headphone correction: slots, curve, database search and file import.");
         applyAutoEq();
         updateDownmix(); // dry path is ready even before a plugin is loaded
 
         addAndMakeVisible (trackingButton);
+        trackingButton.getProperties().set ("switch", true);
         trackingButton.setButtonText ("Head tracking");
         trackingButton.setTooltip ("Off: stops listening to Bridgehead, frees the port and sets Yaw/Pitch/Roll to 0 degrees.");
         trackingButton.setToggleState (settings->getBoolValue ("headTracking", true), dontSendNotification);
@@ -803,6 +806,17 @@ public:
         g.fillAll (Colours::black);
         g.setColour (panel);
         g.fillRect (getLocalBounds().removeFromTop (barHeight));
+
+        static const char* captions[] = { "PLUGIN & AUDIO", "HEAD TRACKING", "OUTPUT" };
+        for (int i = 0; i < 3; ++i)
+        {
+            g.setColour (Colour (0xff303030));
+            g.fillRoundedRectangle (cards[i].toFloat(), 8.0f);
+            g.setColour (Colours::grey);
+            g.setFont (FontOptions (11.0f, Font::bold));
+            g.drawText (captions[i], cards[i].withWidth (captionWidth).withTrimmedLeft (12).withHeight (40),
+                        Justification::centredLeft);
+        }
     }
 
     void resized() override
@@ -816,46 +830,51 @@ public:
         detailLabel.setBounds (bar.removeFromTop (22));
         bar.removeFromTop (8);
 
-        auto row2 = bar.removeFromTop (28);
-        pluginLabel.setBounds (row2.removeFromLeft (52));
-        pluginBox.setBounds (row2.removeFromLeft (210));
-        row2.removeFromLeft (6);
-        browseButton.setBounds (row2.removeFromLeft (82));
-        row2.removeFromLeft (14);
-        audioButton.setBounds (row2.removeFromLeft (128));
-        row2.removeFromLeft (14);
-        portLabel.setBounds (row2.removeFromLeft (112));
-        portEditor.setBounds (row2.removeFromLeft (58));
-        row2.removeFromLeft (14);
-        layoutLabel.setBounds (row2.removeFromLeft (42));
-        layoutBox.setBounds (row2.removeFromLeft (jmin (175, row2.getWidth())));
+        auto inner = [] (Rectangle<int> card) { return card.withTrimmedLeft (captionWidth).reduced (8, 6); };
 
-        bar.removeFromTop (10);
-        auto row3 = bar.removeFromTop (28);
-        const int column = row3.getWidth() / 3;
+        // Card 1: plugin & audio
+        cards[0] = bar.removeFromTop (40);
+        auto r = inner (cards[0]);
+        pluginBox.setBounds (r.removeFromLeft (200).reduced (0, 0));
+        r.removeFromLeft (6);
+        browseButton.setBounds (r.removeFromLeft (76));
+        r.removeFromLeft (10);
+        audioButton.setBounds (r.removeFromLeft (124));
+        r.removeFromLeft (14);
+        layoutLabel.setBounds (r.removeFromLeft (40));
+        layoutBox.setBounds (r.removeFromLeft (150));
+        r.removeFromLeft (10);
+        channelsButton.setBounds (r);
+        bar.removeFromTop (8);
+
+        // Card 2: head tracking (switch + port, then yaw / pitch / roll)
+        cards[1] = bar.removeFromTop (76);
+        r = inner (cards[1]);
+        auto top = r.removeFromTop (28);
+        trackingButton.setBounds (top.removeFromLeft (160));
+        top.removeFromLeft (20);
+        portLabel.setBounds (top.removeFromLeft (110));
+        portEditor.setBounds (top.removeFromLeft (60));
+        r.removeFromTop (6);
+        const int column = r.getWidth() / 3;
         for (size_t i = 0; i < 3; ++i)
         {
-            auto c = row3.removeFromLeft (column).withTrimmedRight (12);
-            axisLabels[i].setBounds (c.removeFromLeft (48));
-            invertButtons[i].setBounds (c.removeFromRight (72));
-            axisBoxes[i].setBounds (c.withTrimmedRight (6));
+            auto c = r.removeFromLeft (column).withTrimmedRight (10);
+            axisLabels[i].setBounds (c.removeFromLeft (44));
+            invertButtons[i].setBounds (c.removeFromRight (66));
+            axisBoxes[i].setBounds (c.withTrimmedRight (4));
         }
-
         bar.removeFromTop (8);
-        bar.removeFromTop (8);
-        auto row5 = bar.removeFromBottom (26);
-        autoEqButton.setBounds (row5.removeFromLeft (190));
-        autoEqSlotBox.setBounds (row5.removeFromLeft (360));
-        row5.removeFromLeft (10);
-        autoEqSearchButton.setBounds (row5.removeFromLeft (200));
 
-        auto row4 = bar.removeFromTop (26);
-        speakerSimButton.setBounds (row4.removeFromLeft (170));
-        row4.removeFromLeft (10);
-        channelsButton.setBounds (row4.removeFromLeft (110));
-        row4.removeFromLeft (10);
-        trackingButton.setBounds (row4.removeFromRight (140));
-        routingLabel.setBounds (row4);
+        // Card 3: output (speaker simulation, headphone correction)
+        cards[2] = bar.removeFromTop (40);
+        r = inner (cards[2]);
+        speakerSimButton.setBounds (r.removeFromLeft (180));
+        r.removeFromLeft (10);
+        autoEqButton.setBounds (r.removeFromLeft (196));
+        autoEqSearchButton.setBounds (r.removeFromRight (100));
+        r.removeFromRight (6);
+        autoEqSlotBox.setBounds (r);
 
         viewport.setBounds (area);
     }
@@ -1478,7 +1497,7 @@ private:
         for (int ch = 0; ch < HostEngine::maxChannels; ++ch)
             engine.setInputSource (ch, sourceFor (ch));
 
-        routingLabel.setText (inputMap.empty() ? "Input routing: 1:1" : "Input routing: custom", dontSendNotification);
+        channelsButton.setButtonText (inputMap.empty() ? "Channels: 1:1" : "Channels: custom");
     }
 
     // Input channels of the plugin, or of the chosen input layout when no plugin is loaded.
@@ -2040,7 +2059,9 @@ private:
     Label routingLabel;
     ToggleButton trackingButton, autoEqButton;
     ComboBox autoEqSlotBox;
-    TextButton autoEqSearchButton { "Headphone correction..." };
+    TextButton autoEqSearchButton { "Edit..." };
+    Rectangle<int> cards[3];
+    static constexpr int captionWidth = 112;
     std::vector<int> inputMap; // device input channel for each plugin input channel, -1 = off
     TextButton browseButton { "Browse..." }, audioButton { "Audio settings..." };
     TextEditor portEditor;
@@ -2051,6 +2072,35 @@ private:
     TooltipWindow tooltips { this };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
+};
+
+//==============================================================================
+// Dark look; toggle buttons marked with the "switch" property are drawn as on/off switches.
+class HostLookAndFeel : public LookAndFeel_V4
+{
+public:
+    HostLookAndFeel() : LookAndFeel_V4 (LookAndFeel_V4::getDarkColourScheme()) {}
+
+    void drawToggleButton (Graphics& g, ToggleButton& b, bool highlighted, bool down) override
+    {
+        if (! b.getProperties()["switch"])
+        {
+            LookAndFeel_V4::drawToggleButton (g, b, highlighted, down);
+            return;
+        }
+        const bool on = b.getToggleState();
+        auto bounds = b.getLocalBounds().toFloat();
+        auto track = bounds.removeFromLeft (38.0f).withSizeKeepingCentre (38.0f, 20.0f);
+        g.setColour (on ? Colour (0xff1f9d55) : Colour (0xff5a5a5a));
+        g.fillRoundedRectangle (track, 10.0f);
+        const float knob = 16.0f;
+        const float x = on ? track.getRight() - knob - 2.0f : track.getX() + 2.0f;
+        g.setColour (Colours::white.withAlpha (highlighted ? 1.0f : 0.92f));
+        g.fillEllipse (x, track.getCentreY() - knob * 0.5f, knob, knob);
+        g.setColour (b.findColour (ToggleButton::textColourId));
+        g.setFont (FontOptions (14.0f));
+        g.drawText (b.getButtonText(), bounds.withTrimmedLeft (8.0f), Justification::centredLeft);
+    }
 };
 
 //==============================================================================
@@ -2092,7 +2142,7 @@ public:
     };
 
 private:
-    LookAndFeel_V4 lookAndFeel { LookAndFeel_V4::getDarkColourScheme() };
+    HostLookAndFeel lookAndFeel;
     std::unique_ptr<MainWindow> mainWindow;
 };
 
