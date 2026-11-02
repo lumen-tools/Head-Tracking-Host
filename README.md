@@ -85,8 +85,16 @@ Click **Headphone correction...**:
   (internet needed only for searching, the list is cached). By default it shows the **recommended
   measurement** per headphone; tick **Show all measurements** to see every source
   (oratory1990, crinacle, Rtings ...). Select a headphone and click a slot number (**1–5**) next to *Save to slot*.
-- **Import file...** loads an AutoEq **ParametricEQ.txt** into the selected slot – download it from
-  autoeq.app or the AutoEq GitHub page (same format as Equalizer APO). No internet needed afterwards.
+- **Import file...** loads a parametric EQ file into the selected slot – no internet needed
+  afterwards. To get one from [autoeq.app](https://autoeq.app): choose your headphones and target
+  (Harman), set **Select equalizer app** to **EqualizerAPO ParametricEq** (not "Custom Parametric Eq")
+  and click the download arrow. The `.txt` file looks like this:
+  ```
+  Preamp: -3.0 dB
+  Filter 1: ON LSC Fc 105 Hz Gain 0.6 dB Q 0.70
+  Filter 2: ON PK Fc 71 Hz Gain 1.4 dB Q 3.73
+  ```
+  The `… ParametricEQ.txt` files from the AutoEq GitHub repository have the same format.
 - **Clear slot** empties it. The **curve** shows the correction of the selected slot.
 
 The profiles use AutoEq's Harman targets (over-ear target for over-ear, in-ear target for in-ear).
