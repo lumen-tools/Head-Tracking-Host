@@ -1668,10 +1668,10 @@ private:
         const bool lost    = device == nullptr && streamWasRunning;
         const bool stillDown = recovering && now - lastCallbackTime > 4000;
 
-        static constexpr uint32 backoff[] = { 3000, 10000, 30000 };
-        const auto wait = backoff[jmin (restartAttempts, 2)];
-
-        if (inGrace || restartAttempts >= 5 || now - lastRestartAttempt < wait)
+        // Never give up: FlexASIO (and other drivers) deliver nothing while no audio is playing and can
+        // only restart once something plays again. Keep retrying quietly; the grace period after each
+        // attempt spaces the retries ~5 s apart.
+        if (inGrace)
             return;
         ignoreUnused (error);
         if (! (stalled || lost || stillDown))
@@ -1712,10 +1712,10 @@ private:
             c = amber; status = "Safe start - the last start did not complete";
             detail = "The saved audio device and plugin were not opened. Choose them again - your settings are kept.";
         }
-        else if (recovering && restartAttempts >= 5 && now - lastCallbackTime > 2000)
+        else if (recovering && restartAttempts >= 2 && now - lastCallbackTime > 4000)
         {
-            c = red; status = "Audio device not responding";
-            detail = "Open \"Audio settings...\" and choose the device again.";
+            c = amber; status = "Waiting for audio...";
+            detail = "The audio device pauses while nothing is playing (normal for FlexASIO). It reconnects by itself when audio starts.";
         }
         else if (recovering && now - lastCallbackTime > 1000)
         {
