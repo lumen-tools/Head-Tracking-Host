@@ -1153,9 +1153,11 @@ private:
             if (auto* d = Desktop::getInstance().getDisplays().getDisplayForRect (top->getScreenBounds()))
                 screen = d->userArea;
 
-        // Grow to show the whole plugin if possible; never shrink a window the user sized.
-        setSize (jlimit (getWidth(), jmax (getWidth(), screen.getWidth()), wantW),
-                 jlimit (getHeight(), jmax (getHeight(), screen.getHeight()), wantH));
+        // Grow to show the whole plugin, but automatically only up to 85 % of the screen (the user
+        // can enlarge or maximise it); never shrink a window the user sized.
+        const int capW = (int) (screen.getWidth() * 0.85), capH = (int) (screen.getHeight() * 0.85);
+        setSize (jlimit (getWidth(), jmax (getWidth(), capW), wantW),
+                 jlimit (getHeight(), jmax (getHeight(), capH), wantH));
         if (auto* top = getTopLevelComponent())
             fitWindowToScreen (*top);   // whole window incl. title bar stays on screen; content scrolls
         layoutPluginArea();
@@ -2468,7 +2470,7 @@ public:
     {
     public:
         explicit MainWindow (const String& name)
-            : DocumentWindow (name, Colours::black, DocumentWindow::closeButton | DocumentWindow::minimiseButton)
+            : DocumentWindow (name, Colours::black, DocumentWindow::allButtons) // minimise, maximise/zoom, close
         {
             setUsingNativeTitleBar (true);
             setContentOwned (new MainComponent(), true); // grows to fit the plugin when it is loaded
