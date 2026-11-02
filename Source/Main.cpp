@@ -1662,19 +1662,20 @@ private:
 
         const bool error   = engine.takeDeviceError();
         const bool inGrace = now - audioStartTime < 5000;          // device may still be starting
-        // Only a stream that stops completely for 4 s counts - short stalls while the source changes,
-        // pauses or stops (and device error notifications on their own) are left alone.
-        const bool stalled = device != nullptr && streamWasRunning && now - lastCallbackTime > 4000;
+        // A running device that simply delivers nothing (e.g. FlexASIO while no audio is playing) is
+        // never touched - it continues by itself when audio starts. Only a device that really stopped
+        // (closed by the system, stopped, or reported an error) is reopened.
+        const bool deviceStopped = device != nullptr && ! device->isPlaying();
+        const bool stalled = streamWasRunning && deviceStopped;
         const bool lost    = device == nullptr && streamWasRunning;
-        const bool stillDown = recovering && now - lastCallbackTime > 4000;
+        const bool stillDown = recovering && (device == nullptr || deviceStopped) && now - lastCallbackTime > 4000;
 
         // Never give up: FlexASIO (and other drivers) deliver nothing while no audio is playing and can
         // only restart once something plays again. Keep retrying quietly; the grace period after each
         // attempt spaces the retries ~5 s apart.
         if (inGrace)
             return;
-        ignoreUnused (error);
-        if (! (stalled || lost || stillDown))
+        if (! (stalled || lost || stillDown || (error && streamWasRunning)))
             return;
 
         lastRestartAttempt = lastReconnectShown = now;
@@ -1714,8 +1715,8 @@ private:
         }
         else if (recovering && restartAttempts >= 2 && now - lastCallbackTime > 4000)
         {
-            c = amber; status = "Waiting for audio...";
-            detail = "The audio device pauses while nothing is playing (normal for FlexASIO). It reconnects by itself when audio starts.";
+            c = amber; status = "Waiting for the audio device...";
+            detail = "The audio device stopped. Retrying automatically - for FlexASIO, start playing something.";
         }
         else if (recovering && now - lastCallbackTime > 1000)
         {
@@ -1725,7 +1726,7 @@ private:
         else if (lastReconnectShown != 0 && now - lastReconnectShown < 10000)
         {
             c = amber; status = "Audio device reconnected";
-            detail = "The audio stream had stopped for 4 seconds and was reopened automatically.";
+            detail = "The audio device had stopped and was reopened automatically.";
         }
         else if (microphoneDenied)
         {
