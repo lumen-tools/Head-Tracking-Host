@@ -50,6 +50,15 @@ all settings stay.
 8. If an axis turns the wrong way, tick **Invert** for it. By default nothing is inverted – the
    normal orientation is the one used by IEM Scene Rotator and Virtuoso.
 
+Everything is saved and restored on the next start: audio devices, Bridgehead port, the last plugin
+and, per plugin, its own settings, the chosen parameters and the invert options.
+
+**Input channels:** click **Channels...** to choose which audio input feeds each plugin channel
+(L, R, C, LFE, Lss, Rss, Lrs, Rrs …). This works with every plugin. On **Windows** the 7.1 side and
+rear surrounds often arrive swapped – the preset **Swap side/rear (Windows)** fixes that in one
+click, **Reset (1:1)** restores the normal order. On the **Mac** this is not needed. (If you
+corrected this in a plugin's own matrix before, set that matrix back to normal.)
+
 **Without head tracking:** untick **Head tracking**. The app stops listening to Bridgehead,
 frees the port, sets Yaw/Pitch/Roll to 0° and leaves the plugin's knobs to you.
 
