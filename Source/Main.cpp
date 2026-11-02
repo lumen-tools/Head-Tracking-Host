@@ -1307,6 +1307,16 @@ private:
             if (editor != nullptr)
             {
                 pluginHolder.addAndMakeVisible (*editor);
+                editorBaseSize = { editor->getWidth(), editor->getHeight() };
+               #if JUCE_MAC
+                const bool canZoom = editor->isResizable();
+                zoomBox.setEnabled (canZoom);
+                zoomBox.setTooltip (canZoom ? "Plugin zoom (resizes the plugin window)."
+                                            : "This plugin has a fixed size - macOS can't zoom it from the host.");
+                if (! canZoom)
+                    zoomBox.setSelectedId (100, dontSendNotification);
+                else
+               #endif
                 zoomBox.setSelectedId (settings->getIntValue (pluginKey ("zoom"), 100), dontSendNotification);
                 applyZoom();
                 editor->addComponentListener (this);
@@ -1376,7 +1386,18 @@ private:
         if (plugin != nullptr)
             settings->setValue (pluginKey ("zoom"), z);
         if (editor != nullptr)
+        {
+           #if JUCE_MAC
+            // macOS: VST3 plugins ignore host scale requests (content scaling is Windows/Linux only).
+            // Resizable editors are zoomed via their size instead; fixed-size ones can't be zoomed.
+            if (editor->isResizable())
+            {
+                editor->setSize (roundToInt (editorBaseSize.x * z / 100.0f), roundToInt (editorBaseSize.y * z / 100.0f));
+            }
+           #else
             editor->setScaleFactor ((float) z / 100.0f);
+           #endif
+        }
         layoutPluginArea();
     }
 
@@ -2372,6 +2393,7 @@ private:
     Viewport sidebarViewport;
     Component pluginHolder;
     ComboBox zoomBox;
+    Point<int> editorBaseSize;
     ToggleButton indicatorButton;
     HeadIndicator headIndicator;
     LevelMeters meters;
