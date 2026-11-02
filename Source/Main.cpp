@@ -440,7 +440,7 @@ public:
                 const float db = Decibels::gainToDecibels (display[(size_t) i], -60.0f);
                 const float level = jlimit (0.0f, 1.0f, (db + 60.0f) / 60.0f);
                 auto fill = bar.withTop (bar.getBottom() - bar.getHeight() * level);
-                g.setColour (db > -3.0f ? ui::red : db > -12.0f ? ui::yellow : ui::green);
+                g.setColour (ui::accent);
                 g.fillRoundedRectangle (fill, 2.0f);
             }
             g.setColour (active ? ui::secondary : ui::secondary.withAlpha (0.35f));
@@ -456,7 +456,7 @@ private:
         if (! takePeak || ! isShowing())
             return;
         for (int i = 0; i < numMeters; ++i)
-            display[(size_t) i] = jmax (takePeak (i), display[(size_t) i] * 0.85f);
+            display[(size_t) i] = jmax (takePeak (i), display[(size_t) i] * 0.93f); // slow, calm release
         repaint();
     }
 
@@ -485,7 +485,7 @@ public:
         g.drawText ("front", (int) (c.x - 20), (int) circleArea.getY() - 1, 40, 10, Justification::centred);
 
         // head: circle + nose, rotated by yaw (positive yaw = turned left)
-        const float angle = -degreesToRadians (angles[0]);
+        const float angle = degreesToRadians (angles[0]);
         Path head;
         head.addEllipse (-radius * 0.40f, -radius * 0.46f, radius * 0.80f, radius * 0.92f);
         Path nose;
@@ -1373,6 +1373,8 @@ private:
         float low = 0.0f, high = 0.0f; // degrees at normalised 0 and 1
     };
 
+    static constexpr int noneId = 100000;
+
     void setupAxisSelection()
     {
         const auto& all = plugin->getParameters();
@@ -1380,6 +1382,8 @@ private:
         {
             auto& box = axisBoxes[i];
             box.clear (dontSendNotification);
+            box.addItem ("- none -", noneId);
+            box.addSeparator();
             for (int p = 0; p < all.size(); ++p)
                 box.addItem (String (p) + " - " + all[p]->getName (64), p + 1);
 
@@ -1389,7 +1393,7 @@ private:
             for (int p = 0; p < all.size() && chosen < 0; ++p)
                 if (saved.isNotEmpty() && all[p]->getName (64) == saved)
                     chosen = p;
-            if (saved.isEmpty())
+            if (saved.isEmpty())   // never chosen for this plugin: guess by name
             {
                 for (int p = 0; p < all.size(); ++p)
                 {
@@ -1398,7 +1402,7 @@ private:
                         chosen = p;
                 }
             }
-            box.setSelectedId (chosen + 1, dontSendNotification);
+            box.setSelectedId (chosen >= 0 ? chosen + 1 : noneId, dontSendNotification);
             selectAxisParam (i, chosen);
 
             const auto invertKey = pluginKey (String ("invert") + axisNames[i]);
@@ -1410,11 +1414,13 @@ private:
     {
         if (plugin == nullptr)
             return;
-        const int p = axisBoxes[axis].getSelectedId() - 1;
+        const int id = axisBoxes[axis].getSelectedId();
+        const int p = id == noneId ? -1 : id - 1;
         selectAxisParam (axis, p);
         const auto& all = plugin->getParameters();
+        // "<none>" is remembered so the axis is not guessed again on the next start.
         settings->setValue (pluginKey (String ("param") + axisNames[axis]),
-                            isPositiveAndBelow (p, all.size()) ? all[p]->getName (64) : String());
+                            isPositiveAndBelow (p, all.size()) ? all[p]->getName (64) : String ("<none>"));
     }
 
     void selectAxisParam (size_t axis, int index)
