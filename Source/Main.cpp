@@ -1373,14 +1373,14 @@ private:
             }
             savePluginCache();
         };
-        pluginScan->onFinished = [this]
+        Component::SafePointer<MainComponent> safeThis (this);
+        pluginScan->onFinished = [this, safeThis]
         {
             scanningPluginName = {};
             settings->setValue ("pluginsScanned", true);
             savePluginCache();
             refreshPluginList (true);
-            MessageManager::callAsync ([safe = Component::SafePointer<MainComponent> (this)]
-                                       { if (safe != nullptr) safe->pluginScan.reset(); });
+            MessageManager::callAsync ([safeThis] { if (safeThis != nullptr) safeThis->pluginScan.reset(); });
         };
         pluginScan->startThread();
     }
