@@ -19,6 +19,10 @@ FetchContent_Declare(JUCE
     GIT_TAG 8.0.12
     GIT_SHALLOW TRUE)
 FetchContent_MakeAvailable(JUCE)
+# Fix for VST3 shell plugins such as Waves' WaveShell (see the script).
+execute_process(COMMAND ${CMAKE_COMMAND} -DJUCE_SOURCE=${juce_SOURCE_DIR}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/PatchJuceVst3ShellIndex.cmake
+                COMMAND_ERROR_IS_FATAL ANY)
 
 juce_add_gui_app(HeadTrackingHost
     PRODUCT_NAME "Head Tracking Host"
