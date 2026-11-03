@@ -36,8 +36,9 @@ all settings stay.
    tracking rate **25 Hz** (higher rates work too).
 3. **Start Head Tracking Host** and choose the plugin from the **Plugin** list
    (or **Browse...** for a plugin in another folder). Next time it opens the last plugin automatically.
-   Like a DAW, the app scans new or changed plugin files in the background, so plugins inside a
+   Like a DAW, the app scans the plugin folders once (on the first start), so plugins inside a
    shell file (e.g. Waves' **WaveShell**) are listed by their own name (e.g. Abbey Road Studio 3).
+   After installing new plugins, choose **Rescan plugins**.
    A plugin that crashes during the scan is marked **(skipped by scan)** – it stays in the list and
    can still be loaded by hand. **Rescan plugins** (end of the list) scans everything again,
    including skipped plugins.

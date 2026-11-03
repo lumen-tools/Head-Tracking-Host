@@ -972,8 +972,10 @@ public:
             pluginBox.setSelectedId (0, dontSendNotification); // choosing it again loads it
         else if (lastPlugin.exists())
             loadPlugin (lastPlugin, settings->getValue ("pluginName"));
-        if (! safeMode)
-            startPluginScan (false); // only new or changed plugin files are opened
+        // Plugins are scanned once (first start) and afterwards only on "Rescan plugins", so
+        // no plugin is opened in the background on a normal start.
+        if (! safeMode && ! settings->getBoolValue ("pluginsScanned", false))
+            startPluginScan (false);
 
         startTimerHz (2);
     }
@@ -1283,6 +1285,7 @@ private:
             scanTimer.stopTimer();
             pluginScanner.reset();
             scanningPluginName = {};
+            settings->setValue ("pluginsScanned", true);
             savePluginCache();
             refreshPluginList (true);
         }
@@ -1495,20 +1498,6 @@ private:
         String error;
         plugin = formatManager.createPluginInstance (*type, sr, bs, error);
 
-        // Shell files: make sure the chosen plugin was created, not another one from the file.
-        if (plugin != nullptr && types.size() > 1 && plugin->getName() != type->name)
-            for (auto* t : types)
-            {
-                if (t == type)
-                    continue;
-                String e;
-                if (auto other = formatManager.createPluginInstance (*t, sr, bs, e))
-                    if (other->getName() == type->name)
-                    {
-                        plugin = std::move (other);
-                        break;
-                    }
-            }
         if (plugin != nullptr)
             pluginDefaultLayout = plugin->getBusesLayout();
         if (plugin == nullptr)
