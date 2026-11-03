@@ -947,12 +947,15 @@ public:
         receiver.addListener (this);
         applyPort();
 
+        loadPluginCache();
         refreshPluginList();
         const File lastPlugin (settings->getValue ("pluginPath"));
         if (safeMode)
             pluginBox.setSelectedId (0, dontSendNotification); // choosing it again loads it
         else if (lastPlugin.exists())
             loadPlugin (lastPlugin, settings->getValue ("pluginName"));
+        if (! safeMode)
+            startPluginScan (false); // only new or changed plugin files are opened
 
         startTimerHz (2);
     }
@@ -1182,28 +1185,85 @@ private:
         return "plugin." + id.removeCharacters (" .") + "." + name;
     }
 
-    // One entry of the plugin list. A file can hold several plugins (a "shell", e.g. Waves):
-    // once it has been opened, each plugin inside it gets its own entry (name not empty).
+    // One entry of the plugin list. A file can hold several plugins (a "shell", e.g. Waves'
+    // WaveShell): each plugin inside it gets its own entry (name not empty).
     struct PluginEntry { File file; String name; };
 
-    static String shellCacheKey (const File& f) { return "shellPlugins." + f.getFullPathName(); }
+    static constexpr int rescanItemId = 100000;
 
-    // Remembers the plugins inside a shell file, so the list can show them without loading it.
-    void rememberShellContents (const File& file, const OwnedArray<PluginDescription>& types)
+    // Plugins found by the last scan inside this file (empty if it was not scanned).
+    Array<PluginDescription> typesInFile (const File& file) const
     {
-        StringArray names;
-        for (auto* t : types)
-            names.addIfNotAlreadyThere (t->name);
-        if (names.size() > 1)
-        {
-            names.sortNatural();
-            settings->setValue (shellCacheKey (file), names.joinIntoString ("\n"));
-        }
+        Array<PluginDescription> result;
+        for (auto& t : knownPlugins.getTypes())
+            if (File (t.fileOrIdentifier) == file)
+                result.add (t);
+        return result;
     }
 
-    StringArray shellContents (const File& file) const
+    File deadMansPedalFile() const
     {
-        return StringArray::fromLines (settings->getValue (shellCacheKey (file)));
+        return settings->getFile().getSiblingFile ("Head Tracking Host - plugin scan.txt");
+    }
+
+    void loadPluginCache()
+    {
+        if (auto xml = settings->getXmlValue ("knownPlugins"))
+            knownPlugins.recreateFromXml (*xml);
+    }
+
+    void savePluginCache()
+    {
+        if (auto xml = knownPlugins.createXml())
+            settings->setValue ("knownPlugins", xml.get());
+        settings->saveIfNeeded();
+    }
+
+    // Scans the plugin folders like a DAW: every new or changed file is opened once and the
+    // plugins inside it are remembered. One file per timer tick keeps the window responsive.
+    // A plugin that crashes during the scan is skipped from then on (dead man's pedal).
+    void startPluginScan (bool full)
+    {
+        AudioPluginFormat* vst3 = nullptr;
+        for (auto* f : formatManager.getFormats())
+            if (f->getName() == "VST3")
+                vst3 = f;
+        if (vst3 == nullptr)
+            return;
+        if (full)
+        {
+            knownPlugins.clear();
+            knownPlugins.clearBlacklistedFiles();
+            deadMansPedalFile().deleteFile();
+        }
+        FileSearchPath path;
+        for (auto& root : pluginFolders())
+            if (root.isDirectory())
+                path.add (root);
+        pluginScanner = std::make_unique<PluginDirectoryScanner> (knownPlugins, *vst3, path, true,
+                                                                  deadMansPedalFile(), false);
+        scanTimer.callback = [this] { pluginScanStep(); };
+        scanTimer.startTimer (15);
+    }
+
+    void pluginScanStep()
+    {
+        if (pluginScanner == nullptr)
+            return scanTimer.stopTimer();
+        scanningPluginName = pluginScanner->getNextPluginFileThatWillBeScanned();
+        const int before = knownPlugins.getNumTypes();
+        String name;
+        const bool more = pluginScanner->scanNextFile (true, name);
+        if (knownPlugins.getNumTypes() != before)
+            savePluginCache();
+        if (! more)
+        {
+            scanTimer.stopTimer();
+            pluginScanner.reset();
+            scanningPluginName = {};
+            savePluginCache();
+            refreshPluginList();
+        }
     }
 
     void refreshPluginList()
@@ -1211,8 +1271,10 @@ private:
         installedPlugins.clear();
         for (auto& f : findInstalledPlugins())
         {
-            const auto inside = shellContents (f);
-            if (inside.isEmpty())
+            StringArray inside;
+            for (auto& t : typesInFile (f))
+                inside.addIfNotAlreadyThere (t.name);
+            if (inside.size() <= 1)
                 installedPlugins.push_back ({ f, {} });
             else
                 for (auto& n : inside)
@@ -1228,8 +1290,14 @@ private:
         pluginBox.addItem ("(none - headphone correction only)", 1);
         pluginBox.addSeparator();
         int id = 2;
+        // Plugins that crashed during a scan stay in the list and can still be loaded by hand.
+        const auto& skipped = knownPlugins.getBlacklistedFiles();
         for (auto& e : installedPlugins)
-            pluginBox.addItem (e.name.isNotEmpty() ? e.name : e.file.getFileNameWithoutExtension(), id++);
+            pluginBox.addItem ((e.name.isNotEmpty() ? e.name : e.file.getFileNameWithoutExtension())
+                                   + (skipped.contains (e.file.getFullPathName()) ? " (skipped by scan)" : ""),
+                               id++);
+        pluginBox.addSeparator();
+        pluginBox.addItem ("Rescan plugins", rescanItemId);
 
         const auto path = settings->getValue ("pluginPath");
         const auto name = settings->getValue ("pluginName");
@@ -1249,6 +1317,13 @@ private:
     void pluginBoxChanged()
     {
         const int id = pluginBox.getSelectedId();
+        if (id == rescanItemId)
+        {
+            refreshPluginList(); // shows the current plugin again
+            if (pluginScanner == nullptr)
+                startPluginScan (true);
+            return;
+        }
         if (id == 1)
         {
             // No plugin: dry signal, e.g. headphone correction only.
@@ -1278,7 +1353,10 @@ private:
         checkFeedback(); // dry signal keeps playing
         updateSize();
 
-        const auto names = shellContents (file);
+        StringArray names;
+        for (auto& t : typesInFile (file))
+            names.addIfNotAlreadyThere (t.name);
+        names.sortNatural();
         PopupMenu menu;
         menu.addSectionHeader (file.getFileNameWithoutExtension() + " contains several plugins:");
         for (int i = 0; i < names.size(); ++i)
@@ -1330,10 +1408,24 @@ private:
             saveState();
         unloadPlugin();
 
+        // Use the scan results if the file was scanned, otherwise open it now and remember it.
         OwnedArray<PluginDescription> types;
-        for (auto* format : formatManager.getFormats())
-            if (format->fileMightContainThisPluginType (file.getFullPathName()))
-                format->findAllTypesForFile (types, file.getFullPathName());
+        for (auto& t : typesInFile (file))
+            types.add (new PluginDescription (t));
+        if (types.isEmpty())
+        {
+            for (auto* format : formatManager.getFormats())
+                if (format->fileMightContainThisPluginType (file.getFullPathName()))
+                    format->findAllTypesForFile (types, file.getFullPathName());
+            for (auto* t : types)
+                knownPlugins.addType (*t);
+            if (! types.isEmpty())
+            {
+                // It loads fine now: no longer skipped by the scan.
+                knownPlugins.removeFromBlacklist (file.getFullPathName());
+                savePluginCache();
+            }
+        }
 
         if (types.isEmpty())
         {
@@ -1355,7 +1447,6 @@ private:
         String chosenName;
         if (types.size() > 1)
         {
-            rememberShellContents (file, types);
             type = nullptr;
             for (auto* t : types)
                 if (name.isNotEmpty() && t->name == name)
@@ -1861,6 +1952,11 @@ private:
         {
             c = amber; status = "No head tracking data on port " + String (currentPort);
             detail = "Start your head tracker app (e.g. Bridgehead, profile \"IEM Scene Rotator YPR\"), or turn head tracking off.";
+        }
+        else if (pluginScanner != nullptr && scanningPluginName.isNotEmpty())
+        {
+            status = "Scanning plugins... " + String (roundToInt (pluginScanner->getProgress() * 100.0f)) + " %";
+            detail = scanningPluginName;
         }
         else
         {
@@ -2478,6 +2574,14 @@ private:
     std::unique_ptr<AudioProcessorEditor> editor;
     std::unique_ptr<FileChooser> chooser;
     std::vector<PluginEntry> installedPlugins;
+    KnownPluginList knownPlugins;
+    std::unique_ptr<PluginDirectoryScanner> pluginScanner;
+    String scanningPluginName;
+    struct CallbackTimer : Timer
+    {
+        std::function<void()> callback;
+        void timerCallback() override { if (callback) callback(); }
+    } scanTimer;
     std::array<AxisParam, 3> params;
     String activeLayout, lastError, lastAddress;
     bool feedbackRisk = false, microphoneDenied = false, audioInitialised = false;
