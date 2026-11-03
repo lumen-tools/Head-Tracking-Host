@@ -1550,35 +1550,6 @@ private:
         updateSize();
     }
 
-    // Speaker arrangements with the same channel count: plugins differ in which 7.1 (or 5.1)
-    // they accept, e.g. side + rear surrounds or surround + rear.
-    static std::vector<AudioChannelSet> layoutVariants (const AudioChannelSet& set)
-    {
-        using CS = AudioChannelSet;
-        std::vector<AudioChannelSet> v { set };
-        auto make = [] (std::initializer_list<CS::ChannelType> types)
-        {
-            AudioChannelSet c;
-            for (auto t : types)
-                c.addChannel (t);
-            return c;
-        };
-        if (set.size() == 8)
-        {
-            v.push_back (make ({ CS::left, CS::right, CS::centre, CS::LFE, CS::leftSurround, CS::rightSurround,
-                                 CS::leftSurroundRear, CS::rightSurroundRear }));
-            v.push_back (make ({ CS::left, CS::right, CS::centre, CS::LFE, CS::leftSurround, CS::rightSurround,
-                                 CS::leftSurroundSide, CS::rightSurroundSide }));
-        }
-        else if (set.size() == 6)
-        {
-            v.push_back (make ({ CS::left, CS::right, CS::centre, CS::LFE, CS::leftSurroundSide, CS::rightSurroundSide }));
-        }
-        if (set.size() > 2)
-            v.push_back (CS::discreteChannels (set.size()));
-        return v;
-    }
-
     // Tries one input arrangement, keeping the plugin's other buses (e.g. a side chain) as they are.
     bool tryInputLayout (const AudioChannelSet& in)
     {
@@ -1622,10 +1593,9 @@ private:
             updateDownmix();
         };
 
-        // 1. The chosen layout, in every common arrangement.
-        for (auto& v : layoutVariants (layouts[(size_t) wanted].set))
-            if (tryInputLayout (v))
-                return accept (wanted);
+        // 1. The chosen layout.
+        if (tryInputLayout (layouts[(size_t) wanted].set))
+            return accept (wanted);
 
         // 2. The plugin's own arrangement, if it has the same number of channels.
         if (! pluginDefaultLayout.inputBuses.isEmpty()
@@ -1646,9 +1616,8 @@ private:
             return sa ? ca > cb : ca < cb;
         });
         for (int i : order)
-            for (auto& v : layoutVariants (layouts[(size_t) i].set))
-                if (tryInputLayout (v))
-                    return accept (i);
+            if (tryInputLayout (layouts[(size_t) i].set))
+                return accept (i);
 
         activeLayout = "plugin default (" + String (plugin->getTotalNumInputChannels()) + " in)";
         applyFold();
