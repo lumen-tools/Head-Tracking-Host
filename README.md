@@ -51,7 +51,9 @@ all settings stay.
 5. **Yaw / Pitch / Roll:** choose the plugin parameters. For Virtuoso they are selected
    automatically (HT Yaw, HT Pitch, HT Roll).
 6. **In the plugin:** turn off its own head tracking input. Virtuoso: Head tracking → **Manual**.
-7. **Input:** the channel layout of your source – 7.1 by default.
+7. **Input:** the channel layout of your source – 7.1 by default. If a plugin does not accept that layout, the
+   closest one is used (shown in the status line); a 7.1 source into a plugin that only takes 5.1
+   gets its rear channels mixed into the surround channels, so nothing is lost.
 8. If an axis turns the wrong way, tick **Invert** for it. By default nothing is inverted – the
    normal orientation is the one used by IEM Scene Rotator and Virtuoso.
 

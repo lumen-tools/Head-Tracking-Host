@@ -561,6 +561,14 @@ public:
             inputMap[(size_t) pluginChannel] = deviceChannel;
     }
 
+    // An extra device channel mixed in at -3 dB (-1 = none), e.g. the 7.1 rear channels into the
+    // surround channels when a plugin only accepts 5.1.
+    void setFoldSource (int pluginChannel, int deviceChannel)
+    {
+        if (isPositiveAndBelow (pluginChannel, maxChannels))
+            foldMap[(size_t) pluginChannel] = deviceChannel;
+    }
+
     void audioDeviceAboutToStart (AudioIODevice* device) override
     {
         headphoneEq.prepare (device->getCurrentSampleRate());
@@ -627,6 +635,10 @@ public:
                 FloatVectorOperations::copy (block.getWritePointer (ch), inputs[src], numSamples);
             else
                 block.clear (ch, 0, numSamples);
+
+            const int fold = ch < maxChannels ? foldMap[(size_t) ch].load() : -1;
+            if (isPositiveAndBelow (fold, numInputs) && ch < pluginIns && inputs[fold] != nullptr)
+                FloatVectorOperations::addWithMultiply (block.getWritePointer (ch), inputs[fold], 0.7071f, numSamples);
         }
 
         // Input meters: peak per routed plugin input channel.
@@ -730,6 +742,12 @@ private:
         std::array<std::atomic<int>, maxChannels> channels;
     };
     InputMap inputMap;
+    struct FoldMap
+    {
+        FoldMap() { for (auto& c : channels) c = -1; }
+        std::atomic<int>& operator[] (size_t i) { return channels[i]; }
+        std::array<std::atomic<int>, maxChannels> channels;
+    } foldMap;
     AudioBuffer<float> buffer;
     MidiBuffer midi;
     double sampleRate = 48000.0;
@@ -1387,6 +1405,8 @@ private:
         engine.setMuted (true);
         deviceManager.removeAudioCallback (&engine);
         engine.setPlugin (nullptr);
+        foldRearIntoSurround = false;
+        applyFold();
         if (editor != nullptr)
         {
             editor->removeComponentListener (this);
@@ -1461,6 +1481,8 @@ private:
 
         String error;
         plugin = formatManager.createPluginInstance (*type, sr, bs, error);
+        if (plugin != nullptr)
+            pluginDefaultLayout = plugin->getBusesLayout();
         if (plugin == nullptr)
         {
             lastError = "Could not load " + file.getFileName() + ": " + error;
@@ -1511,30 +1533,121 @@ private:
         updateSize();
     }
 
+    // Speaker arrangements with the same channel count: plugins differ in which 7.1 (or 5.1)
+    // they accept, e.g. side + rear surrounds or surround + rear.
+    static std::vector<AudioChannelSet> layoutVariants (const AudioChannelSet& set)
+    {
+        using CS = AudioChannelSet;
+        std::vector<AudioChannelSet> v { set };
+        auto make = [] (std::initializer_list<CS::ChannelType> types)
+        {
+            AudioChannelSet c;
+            for (auto t : types)
+                c.addChannel (t);
+            return c;
+        };
+        if (set.size() == 8)
+        {
+            v.push_back (make ({ CS::left, CS::right, CS::centre, CS::LFE, CS::leftSurround, CS::rightSurround,
+                                 CS::leftSurroundRear, CS::rightSurroundRear }));
+            v.push_back (make ({ CS::left, CS::right, CS::centre, CS::LFE, CS::leftSurround, CS::rightSurround,
+                                 CS::leftSurroundSide, CS::rightSurroundSide }));
+        }
+        else if (set.size() == 6)
+        {
+            v.push_back (make ({ CS::left, CS::right, CS::centre, CS::LFE, CS::leftSurroundSide, CS::rightSurroundSide }));
+        }
+        if (set.size() > 2)
+            v.push_back (CS::discreteChannels (set.size()));
+        return v;
+    }
+
+    // Tries one input arrangement, keeping the plugin's other buses (e.g. a side chain) as they are.
+    bool tryInputLayout (const AudioChannelSet& in)
+    {
+        for (int attempt = 0; attempt < 2; ++attempt)
+        {
+            auto l = pluginDefaultLayout;
+            if (l.inputBuses.isEmpty())
+                l.inputBuses.add (in);
+            else
+                l.inputBuses.getReference (0) = in;
+            if (attempt == 0) // stereo output first, then the plugin's own main output
+            {
+                if (l.outputBuses.isEmpty())
+                    l.outputBuses.add (AudioChannelSet::stereo());
+                else
+                    l.outputBuses.getReference (0) = AudioChannelSet::stereo();
+            }
+            if (plugin->setBusesLayout (l))
+                return true;
+        }
+        return false;
+    }
+
     void setPluginLayout()
     {
         auto layouts = inputLayouts();
         const int wanted = jlimit (0, (int) layouts.size() - 1, layoutBox.getSelectedItemIndex());
+        const int wantedChannels = layouts[(size_t) wanted].set.size();
+        foldRearIntoSurround = false;
 
-        std::vector<int> order { wanted };
+        auto accept = [&] (int i)
+        {
+            activeLayout = layouts[(size_t) i].name;
+            // A 7.1 source into a plugin that only takes 5.1: mix the extra pair in instead of losing it.
+            if (wantedChannels == 8 && layouts[(size_t) i].set.size() == 6)
+            {
+                foldRearIntoSurround = true;
+                activeLayout = "5.1 (7.1 rear mixed in)";
+            }
+            applyFold();
+            updateDownmix();
+        };
+
+        // 1. The chosen layout, in every common arrangement.
+        for (auto& v : layoutVariants (layouts[(size_t) wanted].set))
+            if (tryInputLayout (v))
+                return accept (wanted);
+
+        // 2. The plugin's own arrangement, if it has the same number of channels.
+        if (! pluginDefaultLayout.inputBuses.isEmpty()
+            && pluginDefaultLayout.inputBuses[0].size() == wantedChannels
+            && plugin->setBusesLayout (pluginDefaultLayout))
+            return accept (wanted);
+
+        // 3. Other layouts: the closest smaller one first, then larger ones.
+        std::vector<int> order;
         for (int i = 0; i < (int) layouts.size(); ++i)
             if (i != wanted)
                 order.push_back (i);
-
-        for (int i : order)
+        std::stable_sort (order.begin(), order.end(), [&] (int a, int b)
         {
-            AudioProcessor::BusesLayout l;
-            l.inputBuses.add (layouts[(size_t) i].set);
-            l.outputBuses.add (AudioChannelSet::stereo());
-            if (plugin->setBusesLayout (l))
-            {
-                activeLayout = layouts[(size_t) i].name;
-                updateDownmix();
-                return;
-            }
-        }
+            const int ca = layouts[(size_t) a].set.size(), cb = layouts[(size_t) b].set.size();
+            const bool sa = ca < wantedChannels, sb = cb < wantedChannels;
+            if (sa != sb) return sa;
+            return sa ? ca > cb : ca < cb;
+        });
+        for (int i : order)
+            for (auto& v : layoutVariants (layouts[(size_t) i].set))
+                if (tryInputLayout (v))
+                    return accept (i);
+
         activeLayout = "plugin default (" + String (plugin->getTotalNumInputChannels()) + " in)";
+        applyFold();
         updateDownmix();
+    }
+
+    // Feeds the rear pair of a 7.1 source into the surround pair of a 5.1-only plugin.
+    void applyFold()
+    {
+        for (int ch = 0; ch < HostEngine::maxChannels; ++ch)
+            engine.setFoldSource (ch, -1);
+        if (foldRearIntoSurround)
+        {
+            engine.setFoldSource (4, sourceFor (6));
+            engine.setFoldSource (5, sourceFor (7));
+        }
     }
 
     // Common stereo downmix: front L/R at 0 dB, centre and all other channels at -3 dB to their
@@ -2031,6 +2144,7 @@ private:
             engine.setInputSource (ch, sourceFor (ch));
 
         channelsButton.setButtonText (inputMap.empty() ? "Channels: 1:1" : "Channels: custom");
+        applyFold();
     }
 
     // Input channels of the plugin, or of the chosen input layout when no plugin is loaded.
@@ -2574,6 +2688,8 @@ private:
     std::unique_ptr<AudioProcessorEditor> editor;
     std::unique_ptr<FileChooser> chooser;
     std::vector<PluginEntry> installedPlugins;
+    AudioProcessor::BusesLayout pluginDefaultLayout;
+    bool foldRearIntoSurround = false;
     KnownPluginList knownPlugins;
     std::unique_ptr<PluginDirectoryScanner> pluginScanner;
     String scanningPluginName;
