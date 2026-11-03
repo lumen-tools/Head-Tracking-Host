@@ -933,6 +933,17 @@ public:
         zoomBox.setTooltip ("Plugin zoom - works with plugins that support scaling.");
         zoomBox.onChange = [this] { applyZoom(); };
 
+        sidebar.addAndMakeVisible (foldButton);
+        foldButton.getProperties().set ("switch", true);
+        foldButton.setToggleState (settings->getBoolValue ("mixRearInto51", true), dontSendNotification);
+        foldButton.setTooltip ("When a plugin only accepts 5.1: mix the 7.1 rear channels into the surround channels "
+                               "instead of leaving them out.");
+        foldButton.onClick = [this]
+        {
+            settings->setValue ("mixRearInto51", foldButton.getToggleState());
+            applyFold();
+        };
+
         sidebar.addAndMakeVisible (indicatorButton);
         indicatorButton.getProperties().set ("switch", true);
         indicatorButton.setToggleState (settings->getBoolValue ("headIndicator", true), dontSendNotification);
@@ -1101,6 +1112,7 @@ public:
         }
         layoutBox.setBounds (row ("Input"));
         channelsButton.setBounds (row ("Channels"));
+        foldButton.setBounds (switchArea (row ("Mix 7.1 rear into 5.1", 200)));
         zoomBox.setBounds (row ("Plugin zoom"));
         endGroup();
 
@@ -1422,6 +1434,7 @@ private:
         deviceManager.removeAudioCallback (&engine);
         engine.setPlugin (nullptr);
         foldRearIntoSurround = false;
+        activeLayoutBase = {};
         applyFold();
         if (editor != nullptr)
         {
@@ -1582,13 +1595,9 @@ private:
 
         auto accept = [&] (int i)
         {
-            activeLayout = layouts[(size_t) i].name;
-            // A 7.1 source into a plugin that only takes 5.1: mix the extra pair in instead of losing it.
-            if (wantedChannels == 8 && layouts[(size_t) i].set.size() == 6)
-            {
-                foldRearIntoSurround = true;
-                activeLayout = "5.1 (7.1 rear mixed in)";
-            }
+            // A 7.1 source into a plugin that only takes 5.1: optionally mix the rear pair in.
+            foldRearIntoSurround = wantedChannels == 8 && layouts[(size_t) i].set.size() == 6;
+            activeLayoutBase = layouts[(size_t) i].name;
             applyFold();
             updateDownmix();
         };
@@ -1619,6 +1628,7 @@ private:
             if (tryInputLayout (layouts[(size_t) i].set))
                 return accept (i);
 
+        activeLayoutBase = {};
         activeLayout = "plugin default (" + String (plugin->getTotalNumInputChannels()) + " in)";
         applyFold();
         updateDownmix();
@@ -1629,7 +1639,11 @@ private:
     {
         for (int ch = 0; ch < HostEngine::maxChannels; ++ch)
             engine.setFoldSource (ch, -1);
-        if (foldRearIntoSurround)
+        if (activeLayoutBase.isNotEmpty())
+            activeLayout = ! foldRearIntoSurround ? activeLayoutBase
+                         : foldButton.getToggleState() ? String ("5.1 (7.1 rear mixed in)")
+                                                       : String ("5.1 (7.1 rear channels off)");
+        if (foldRearIntoSurround && foldButton.getToggleState())
         {
             engine.setFoldSource (4, sourceFor (6));
             engine.setFoldSource (5, sourceFor (7));
@@ -2675,7 +2689,9 @@ private:
     std::unique_ptr<FileChooser> chooser;
     std::vector<PluginEntry> installedPlugins;
     AudioProcessor::BusesLayout pluginDefaultLayout;
-    bool foldRearIntoSurround = false;
+    bool foldRearIntoSurround = false; // a 7.1 source feeds a plugin that only takes 5.1
+    String activeLayoutBase;
+    ToggleButton foldButton;
 
     KnownPluginList knownPlugins;
     std::unique_ptr<PluginDirectoryScanner> pluginScanner;
