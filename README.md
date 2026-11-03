@@ -39,8 +39,9 @@ all settings stay.
    Like a DAW, the app scans the plugin folders once (on the first start), so plugins inside a
    shell file (e.g. Waves' **WaveShell**) are listed by their own name (e.g. Abbey Road Studio 3).
    After installing new plugins, choose **Rescan plugins**.
-   A plugin that crashes during the scan is marked **(skipped by scan)** – it stays in the list and
-   can still be loaded by hand. **Rescan plugins** (end of the list) scans everything again,
+   The scan runs in a separate process, so a plugin that crashes or hangs while being scanned
+   does not take the app down: it is marked **(skipped by scan)**, the scan goes on, and the
+   plugin stays in the list and can still be loaded by hand. **Rescan plugins** (end of the list) scans everything again,
    including skipped plugins.
 4. **Audio settings...** – the same devices you use for the standalone app:
    - **Windows:** device type **ASIO**, device **FlexASIO**. Enable the input channels
@@ -49,13 +50,13 @@ all settings stay.
      correction for BlackHole and your headphones as clock source), output = your **headphones**.
      Enable the **BlackHole input channels** (1–8 for 7.1). macOS asks for microphone access on
      first start; allow it, otherwise no audio arrives.
-5. **Yaw / Pitch / Roll:** choose the plugin parameters. For Virtuoso they are selected
-   automatically (HT Yaw, HT Pitch, HT Roll).
+5. **Yaw / Pitch / Roll:** choose the plugin parameters (they start at **- none -**). For Virtuoso:
+   HT Yaw, HT Pitch, HT Roll. The choice is saved per plugin.
 6. **In the plugin:** turn off its own head tracking input. Virtuoso: Head tracking → **Manual**.
 7. **Input:** the channel layout of your source – 7.1 by default. If a plugin does not accept that layout, the
    closest one is used (shown in the status line); a 7.1 source into a plugin that only takes 5.1
    gets its rear channels mixed into the surround channels (switch **Mix 7.1 rear into 5.1**,
-   on by default).
+   off by default).
 8. If an axis turns the wrong way, tick **Invert** for it. By default nothing is inverted – the
    normal orientation is the one used by IEM Scene Rotator and Virtuoso.
 

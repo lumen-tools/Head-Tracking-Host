@@ -114,6 +114,84 @@ Array<File> findInstalledPlugins()
     return result;
 }
 
+// Plugin scanning runs in a separate process (this program started with --scan-plugin), like in
+// a DAW: a plugin that crashes or hangs while being scanned only ends that process.
+constexpr const char* scanPluginArg = "--scan-plugin";
+
+// Child process: writes the plugins inside one file as XML, then the process ends.
+void scanPluginFileToXml (const String& pluginFile, const File& resultFile)
+{
+    AudioPluginFormatManager formats;
+    addDefaultFormatsToManager (formats);
+    KnownPluginList found;
+    for (auto* format : formats.getFormats())
+        if (format->fileMightContainThisPluginType (pluginFile))
+        {
+            OwnedArray<PluginDescription> types;
+            format->findAllTypesForFile (types, pluginFile);
+            for (auto* t : types)
+                found.addType (*t);
+        }
+    if (auto xml = found.createXml())
+        xml->writeTo (resultFile);
+}
+
+// Main program: scans the given files one by one, each in its own child process.
+class PluginScanThread : public Thread
+{
+public:
+    // Results are delivered on the message thread. xml == nullptr: the scan crashed or hung.
+    std::function<void (const String& file, int index, int total)> onProgress;
+    std::function<void (const String& file, std::shared_ptr<XmlElement> xml)> onResult;
+    std::function<void()> onFinished;
+
+    explicit PluginScanThread (StringArray filesToScan) : Thread ("Plugin scan"), files (std::move (filesToScan))
+    {
+        selfRef = this; // created here on the message thread, copied by the scan thread
+    }
+    ~PluginScanThread() override { stopThread (10000); }
+
+    void run() override
+    {
+        const auto exe = File::getSpecialLocation (File::currentExecutableFile).getFullPathName();
+        for (int i = 0; i < files.size() && ! threadShouldExit(); ++i)
+        {
+            const auto file = files[i];
+            post ([this, file, i] { if (onProgress) onProgress (file, i, files.size()); });
+
+            auto resultFile = File::createTempFile (".xml");
+            std::shared_ptr<XmlElement> xml;
+            ChildProcess child;
+            if (child.start (StringArray { exe, scanPluginArg, file, resultFile.getFullPathName() }, 0))
+            {
+                const auto start = Time::getMillisecondCounter();
+                while (child.isRunning() && ! threadShouldExit() && Time::getMillisecondCounter() - start < 120000)
+                    child.waitForProcessToFinish (200);
+                if (child.isRunning())
+                    child.kill();                        // hung, or the program is closing
+                else if (child.getExitCode() == 0)
+                    xml = parseXML (resultFile);        // nullptr if it crashed before writing
+            }
+            resultFile.deleteFile();
+            if (threadShouldExit())
+                return;
+            post ([this, file, xml] { if (onResult) onResult (file, xml); });
+        }
+        post ([this] { if (onFinished) onFinished(); });
+    }
+
+private:
+    void post (std::function<void()> f)
+    {
+        MessageManager::callAsync ([safe = selfRef, f]
+                                   { if (safe != nullptr) f(); });
+    }
+
+    StringArray files;
+    WeakReference<PluginScanThread> selfRef;
+    JUCE_DECLARE_WEAK_REFERENCEABLE (PluginScanThread)
+};
+
 // Returns the loopback "family" of a virtual audio device (input and output side of the same
 // cable have different names, e.g. "CABLE Output" / "CABLE Input"), or an empty string.
 String loopbackFamily (const String& name)
@@ -935,7 +1013,7 @@ public:
 
         sidebar.addAndMakeVisible (foldButton);
         foldButton.getProperties().set ("switch", true);
-        foldButton.setToggleState (settings->getBoolValue ("mixRearInto51", true), dontSendNotification);
+        foldButton.setToggleState (settings->getBoolValue ("mixRearInto51", false), dontSendNotification);
         foldButton.setTooltip ("When a plugin only accepts 5.1: mix the 7.1 rear channels into the surround channels "
                                "instead of leaving them out.");
         foldButton.onClick = [this]
@@ -1008,6 +1086,7 @@ public:
 
     ~MainComponent() override
     {
+        pluginScan.reset(); // stops the scan (and ends a running scan process)
         saveState();
         settings->setValue ("startupPending", false);
         settings->saveIfNeeded();
@@ -1237,11 +1316,6 @@ private:
         return result;
     }
 
-    File deadMansPedalFile() const
-    {
-        return settings->getFile().getSiblingFile ("Head Tracking Host - plugin scan.txt");
-    }
-
     void loadPluginCache()
     {
         if (auto xml = settings->getXmlValue ("knownPlugins"))
@@ -1255,52 +1329,60 @@ private:
         settings->saveIfNeeded();
     }
 
-    // Scans the plugin folders like a DAW: every new or changed file is opened once and the
-    // plugins inside it are remembered. One file per timer tick keeps the window responsive.
-    // A plugin that crashes during the scan is skipped from then on (dead man's pedal).
+    // Scans the plugin folders like a DAW: every new or changed file is opened once (in its own
+    // process, see PluginScanThread) and the plugins inside it are remembered. A plugin that
+    // crashes or hangs is marked "skipped by scan" and the scan goes on with the next file.
     void startPluginScan (bool full)
     {
         AudioPluginFormat* vst3 = nullptr;
         for (auto* f : formatManager.getFormats())
             if (f->getName() == "VST3")
                 vst3 = f;
-        if (vst3 == nullptr)
+        if (vst3 == nullptr || pluginScan != nullptr)
             return;
         if (full)
         {
             knownPlugins.clear();
             knownPlugins.clearBlacklistedFiles();
-            deadMansPedalFile().deleteFile();
         }
         FileSearchPath path;
         for (auto& root : pluginFolders())
             if (root.isDirectory())
                 path.add (root);
-        pluginScanner = std::make_unique<PluginDirectoryScanner> (knownPlugins, *vst3, path, true,
-                                                                  deadMansPedalFile(), false);
-        scanTimer.callback = [this] { pluginScanStep(); };
-        scanTimer.startTimer (15);
-    }
+        StringArray toScan;
+        for (auto& f : vst3->searchPathsForPlugins (path, true, false))
+            if (! knownPlugins.isListingUpToDate (f, *vst3) && ! knownPlugins.getBlacklistedFiles().contains (f))
+                toScan.add (f);
 
-    void pluginScanStep()
-    {
-        if (pluginScanner == nullptr)
-            return scanTimer.stopTimer();
-        scanningPluginName = pluginScanner->getNextPluginFileThatWillBeScanned();
-        const int before = knownPlugins.getNumTypes();
-        String name;
-        const bool more = pluginScanner->scanNextFile (true, name);
-        if (knownPlugins.getNumTypes() != before)
-            savePluginCache();
-        if (! more)
+        pluginScan = std::make_unique<PluginScanThread> (toScan);
+        pluginScan->onProgress = [this] (const String& file, int index, int total)
         {
-            scanTimer.stopTimer();
-            pluginScanner.reset();
+            scanningPluginName = File (file).getFileNameWithoutExtension();
+            scanProgress = total > 0 ? (float) index / (float) total : 0.0f;
+        };
+        pluginScan->onResult = [this] (const String& file, std::shared_ptr<XmlElement> xml)
+        {
+            if (xml == nullptr)
+                knownPlugins.addToBlacklist (file);
+            else
+            {
+                KnownPluginList found;
+                found.recreateFromXml (*xml);
+                for (auto& t : found.getTypes())
+                    knownPlugins.addType (t);
+            }
+            savePluginCache();
+        };
+        pluginScan->onFinished = [this]
+        {
             scanningPluginName = {};
             settings->setValue ("pluginsScanned", true);
             savePluginCache();
             refreshPluginList (true);
-        }
+            MessageManager::callAsync ([safe = Component::SafePointer<MainComponent> (this)]
+                                       { if (safe != nullptr) safe->pluginScan.reset(); });
+        };
+        pluginScan->startThread();
     }
 
     // onlyIfChanged: keep the list untouched when nothing changed, so an open drop-down is not
@@ -1362,8 +1444,7 @@ private:
         if (id == rescanItemId)
         {
             refreshPluginList(); // shows the current plugin again
-            if (pluginScanner == nullptr)
-                startPluginScan (true);
+            startPluginScan (true);
             return;
         }
         if (id == 1)
@@ -1731,21 +1812,12 @@ private:
             for (int p = 0; p < all.size(); ++p)
                 box.addItem (String (p) + " - " + all[p]->getName (64), p + 1);
 
-            // Saved choice, otherwise guess by name ("HT Yaw" preferred over plain "Yaw").
+            // The saved choice; "- none -" until the user picks a parameter for this plugin.
             const auto saved = settings->getValue (pluginKey (String ("param") + axisNames[i]));
             int chosen = -1;
             for (int p = 0; p < all.size() && chosen < 0; ++p)
                 if (saved.isNotEmpty() && all[p]->getName (64) == saved)
                     chosen = p;
-            if (saved.isEmpty())   // never chosen for this plugin: guess by name
-            {
-                for (int p = 0; p < all.size(); ++p)
-                {
-                    const auto name = all[p]->getName (64);
-                    if (name.containsIgnoreCase (axisNames[i]) && (chosen < 0 || name.containsIgnoreCase ("HT")))
-                        chosen = p;
-                }
-            }
             box.setSelectedId (chosen >= 0 ? chosen + 1 : noneId, dontSendNotification);
             selectAxisParam (i, chosen);
 
@@ -2066,9 +2138,9 @@ private:
             c = amber; status = "No head tracking data on port " + String (currentPort);
             detail = "Start your head tracker app (e.g. Bridgehead, profile \"IEM Scene Rotator YPR\"), or turn head tracking off.";
         }
-        else if (pluginScanner != nullptr && scanningPluginName.isNotEmpty())
+        else if (pluginScan != nullptr && scanningPluginName.isNotEmpty())
         {
-            status = "Scanning plugins... " + String (roundToInt (pluginScanner->getProgress() * 100.0f)) + " %";
+            status = "Scanning plugins... " + String (roundToInt (scanProgress * 100.0f)) + " %";
             detail = scanningPluginName;
         }
         else
@@ -2694,13 +2766,9 @@ private:
     ToggleButton foldButton;
 
     KnownPluginList knownPlugins;
-    std::unique_ptr<PluginDirectoryScanner> pluginScanner;
     String scanningPluginName;
-    struct CallbackTimer : Timer
-    {
-        std::function<void()> callback;
-        void timerCallback() override { if (callback) callback(); }
-    } scanTimer;
+    float scanProgress = 0.0f;
+    std::unique_ptr<PluginScanThread> pluginScan;
     std::array<AxisParam, 3> params;
     String activeLayout, lastError, lastAddress;
     bool feedbackRisk = false, microphoneDenied = false, audioInitialised = false;
@@ -2808,10 +2876,19 @@ class HeadTrackingHostApp : public JUCEApplication
 public:
     const String getApplicationName() override    { return JUCE_APPLICATION_NAME_STRING; }
     const String getApplicationVersion() override { return JUCE_APPLICATION_VERSION_STRING; }
-    bool moreThanOneInstanceAllowed() override    { return false; }
+    // The plugin scan starts this program a second time (see PluginScanThread).
+    static bool isScanProcess() { return getCommandLineParameterArray()[0] == scanPluginArg; }
+    bool moreThanOneInstanceAllowed() override    { return isScanProcess(); }
 
     void initialise (const String&) override
     {
+        if (isScanProcess())
+        {
+            const auto args = getCommandLineParameterArray();
+            scanPluginFileToXml (args[1], File (args[2]));
+            quit();
+            return;
+        }
         LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
         mainWindow = std::make_unique<MainWindow> (getApplicationName());
     }
