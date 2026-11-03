@@ -36,6 +36,8 @@ all settings stay.
    tracking rate **25 Hz** (higher rates work too).
 3. **Start Head Tracking Host** and choose the plugin from the **Plugin** list
    (or **Browse...** for a plugin in another folder). Next time it opens the last plugin automatically.
+   Files that hold several plugins (e.g. Waves' **WaveShell**) ask once which plugin to load; after
+   that every plugin inside is listed by its own name (e.g. Abbey Road Studio 3).
 4. **Audio settings...** – the same devices you use for the standalone app:
    - **Windows:** device type **ASIO**, device **FlexASIO**. Enable the input channels
      (IN 0–7 for 7.1) and the output channels.

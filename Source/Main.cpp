@@ -952,7 +952,7 @@ public:
         if (safeMode)
             pluginBox.setSelectedId (0, dontSendNotification); // choosing it again loads it
         else if (lastPlugin.exists())
-            loadPlugin (lastPlugin);
+            loadPlugin (lastPlugin, settings->getValue ("pluginName"));
 
         startTimerHz (2);
     }
@@ -1176,28 +1176,74 @@ private:
     // Plugin selection
     String pluginKey (const String& name) const
     {
-        return "plugin." + File (settings->getValue ("pluginPath")).getFileNameWithoutExtension().removeCharacters (" .") + "." + name;
+        // Plugins from a shell file (e.g. Waves' WaveShell) are stored under their own name.
+        const auto sub = settings->getValue ("pluginName");
+        const auto id = sub.isNotEmpty() ? sub : File (settings->getValue ("pluginPath")).getFileNameWithoutExtension();
+        return "plugin." + id.removeCharacters (" .") + "." + name;
+    }
+
+    // One entry of the plugin list. A file can hold several plugins (a "shell", e.g. Waves):
+    // once it has been opened, each plugin inside it gets its own entry (name not empty).
+    struct PluginEntry { File file; String name; };
+
+    static String shellCacheKey (const File& f) { return "shellPlugins." + f.getFullPathName(); }
+
+    // Remembers the plugins inside a shell file, so the list can show them without loading it.
+    void rememberShellContents (const File& file, const OwnedArray<PluginDescription>& types)
+    {
+        StringArray names;
+        for (auto* t : types)
+            names.addIfNotAlreadyThere (t->name);
+        if (names.size() > 1)
+        {
+            names.sortNatural();
+            settings->setValue (shellCacheKey (file), names.joinIntoString ("\n"));
+        }
+    }
+
+    StringArray shellContents (const File& file) const
+    {
+        return StringArray::fromLines (settings->getValue (shellCacheKey (file)));
     }
 
     void refreshPluginList()
     {
-        installedPlugins = findInstalledPlugins();
+        installedPlugins.clear();
+        for (auto& f : findInstalledPlugins())
+        {
+            const auto inside = shellContents (f);
+            if (inside.isEmpty())
+                installedPlugins.push_back ({ f, {} });
+            else
+                for (auto& n : inside)
+                    installedPlugins.push_back ({ f, n });
+        }
+        std::stable_sort (installedPlugins.begin(), installedPlugins.end(), [] (const PluginEntry& a, const PluginEntry& b)
+        {
+            auto label = [] (const PluginEntry& e) { return e.name.isNotEmpty() ? e.name : e.file.getFileNameWithoutExtension(); };
+            return label (a).compareIgnoreCase (label (b)) < 0;
+        });
+
         pluginBox.clear (dontSendNotification);
         pluginBox.addItem ("(none - headphone correction only)", 1);
         pluginBox.addSeparator();
         int id = 2;
-        for (auto& f : installedPlugins)
-            pluginBox.addItem (f.getFileNameWithoutExtension(), id++);
+        for (auto& e : installedPlugins)
+            pluginBox.addItem (e.name.isNotEmpty() ? e.name : e.file.getFileNameWithoutExtension(), id++);
 
         const auto path = settings->getValue ("pluginPath");
+        const auto name = settings->getValue ("pluginName");
         const File current (path);
-        const int index = path.isNotEmpty() ? installedPlugins.indexOf (current) : -1;
+        int index = -1;
+        for (int i = 0; i < (int) installedPlugins.size(); ++i)
+            if (installedPlugins[(size_t) i].file == current && installedPlugins[(size_t) i].name == name)
+                index = i;
         if (path.isEmpty())
             pluginBox.setSelectedId (1, dontSendNotification);
         else if (index >= 0)
             pluginBox.setSelectedId (index + 2, dontSendNotification);
         else if (current.exists())
-            pluginBox.setText (current.getFileNameWithoutExtension(), dontSendNotification);
+            pluginBox.setText (name.isNotEmpty() ? name : current.getFileNameWithoutExtension(), dontSendNotification);
     }
 
     void pluginBoxChanged()
@@ -1210,6 +1256,7 @@ private:
                 saveState();
             unloadPlugin();
             settings->setValue ("pluginPath", String());
+            settings->setValue ("pluginName", String());
             lastError = {};
             deviceManager.addAudioCallback (&engine);
             engine.setMuted (feedbackRisk);
@@ -1217,8 +1264,31 @@ private:
             return;
         }
         const int index = id - 2;
-        if (isPositiveAndBelow (index, installedPlugins.size()))
-            loadPlugin (installedPlugins[index]);
+        if (isPositiveAndBelow (index, (int) installedPlugins.size()))
+            loadPlugin (installedPlugins[(size_t) index].file, installedPlugins[(size_t) index].name);
+    }
+
+    // Shows the plugins inside a shell file and loads the chosen one.
+    void askWhichShellPlugin (const File& file)
+    {
+        settings->setValue ("pluginPath", String());
+        settings->setValue ("pluginName", String());
+        refreshPluginList(); // now lists every plugin of the shell
+        deviceManager.addAudioCallback (&engine);
+        checkFeedback(); // dry signal keeps playing
+        updateSize();
+
+        const auto names = shellContents (file);
+        PopupMenu menu;
+        menu.addSectionHeader (file.getFileNameWithoutExtension() + " contains several plugins:");
+        for (int i = 0; i < names.size(); ++i)
+            menu.addItem (i + 1, names[i]);
+        menu.showMenuAsync (PopupMenu::Options().withTargetComponent (&pluginBox),
+                            [safeThis = Component::SafePointer<Component> (this), this, file, names] (int result)
+                            {
+                                if (safeThis != nullptr && result > 0)
+                                    loadPlugin (file, names[result - 1]);
+                            });
     }
 
     void browseForPlugin()
@@ -1252,7 +1322,9 @@ private:
         updateDownmix();
     }
 
-    void loadPlugin (const File& file)
+    // Loads a plugin file. For a shell file with several plugins, "name" picks one of them;
+    // without a name the user is asked which one to load.
+    void loadPlugin (const File& file, const String& name = {})
     {
         if (plugin != nullptr)
             saveState();
@@ -1265,6 +1337,8 @@ private:
 
         if (types.isEmpty())
         {
+            settings->setValue ("pluginPath", String());
+            settings->setValue ("pluginName", String());
             lastError = "Not a usable VST3 plugin: " + file.getFileName();
             deviceManager.addAudioCallback (&engine);
             checkFeedback(); // unmute again (dry signal keeps playing)
@@ -1276,8 +1350,26 @@ private:
         const double sr = device != nullptr ? device->getCurrentSampleRate() : 48000.0;
         const int bs    = device != nullptr ? device->getCurrentBufferSizeSamples() : 512;
 
+        // A shell file (e.g. Waves' WaveShell) holds many plugins: pick the requested one.
+        const PluginDescription* type = types[0];
+        String chosenName;
+        if (types.size() > 1)
+        {
+            rememberShellContents (file, types);
+            type = nullptr;
+            for (auto* t : types)
+                if (name.isNotEmpty() && t->name == name)
+                    type = t;
+            if (type == nullptr)
+            {
+                askWhichShellPlugin (file);
+                return;
+            }
+            chosenName = type->name;
+        }
+
         String error;
-        plugin = formatManager.createPluginInstance (*types[0], sr, bs, error);
+        plugin = formatManager.createPluginInstance (*type, sr, bs, error);
         if (plugin == nullptr)
         {
             lastError = "Could not load " + file.getFileName() + ": " + error;
@@ -1288,6 +1380,7 @@ private:
         }
 
         settings->setValue ("pluginPath", file.getFullPathName());
+        settings->setValue ("pluginName", chosenName);
         refreshPluginList();
 
         MemoryBlock state;
@@ -2384,7 +2477,7 @@ private:
     std::unique_ptr<AudioPluginInstance> plugin;
     std::unique_ptr<AudioProcessorEditor> editor;
     std::unique_ptr<FileChooser> chooser;
-    Array<File> installedPlugins;
+    std::vector<PluginEntry> installedPlugins;
     std::array<AxisParam, 3> params;
     String activeLayout, lastError, lastAddress;
     bool feedbackRisk = false, microphoneDenied = false, audioInitialised = false;
