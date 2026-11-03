@@ -1548,10 +1548,17 @@ private:
         };
         if (set.size() == 8)
         {
-            v.push_back (make ({ CS::left, CS::right, CS::centre, CS::LFE, CS::leftSurround, CS::rightSurround,
-                                 CS::leftSurroundRear, CS::rightSurroundRear }));
-            v.push_back (make ({ CS::left, CS::right, CS::centre, CS::LFE, CS::leftSurround, CS::rightSurround,
-                                 CS::leftSurroundSide, CS::rightSurroundSide }));
+            // L R C LFE plus every combination of two surround pairs (side, rear, surround,
+            // centre-left/right as in cinema 7.1, wide).
+            const std::pair<CS::ChannelType, CS::ChannelType> pairs[] {
+                { CS::leftSurroundSide, CS::rightSurroundSide }, { CS::leftSurroundRear, CS::rightSurroundRear },
+                { CS::leftSurround, CS::rightSurround },         { CS::leftCentre, CS::rightCentre },
+                { CS::wideLeft, CS::wideRight } };
+            for (size_t a = 0; a < std::size (pairs); ++a)
+                for (size_t b = a + 1; b < std::size (pairs); ++b)
+                    v.push_back (make ({ CS::left, CS::right, CS::centre, CS::LFE,
+                                         pairs[a].first, pairs[a].second, pairs[b].first, pairs[b].second }));
+            v.push_back (CS::create7point1SDDS());
         }
         else if (set.size() == 6)
         {
@@ -1579,10 +1586,35 @@ private:
                 else
                     l.outputBuses.getReference (0) = AudioChannelSet::stereo();
             }
-            if (plugin->setBusesLayout (l))
+            const bool ok = plugin->setBusesLayout (l);
+            layoutLog.add ("  try in: " + describeLayout (l) + "  ->  " + (ok ? "OK" : "rejected"));
+            if (ok)
                 return true;
         }
         return false;
+    }
+
+    static String describeSet (const AudioChannelSet& set)
+    {
+        StringArray names;
+        for (auto t : set.getChannelTypes())
+            names.add (AudioChannelSet::getAbbreviatedChannelTypeName (t));
+        return String (set.size()) + " ch [" + names.joinIntoString (" ") + "]";
+    }
+
+    static String describeLayout (const AudioProcessor::BusesLayout& l)
+    {
+        StringArray ins, outs;
+        for (auto& b : l.inputBuses)  ins.add (describeSet (b));
+        for (auto& b : l.outputBuses) outs.add (describeSet (b));
+        return "in " + ins.joinIntoString (" + ") + " / out " + outs.joinIntoString (" + ");
+    }
+
+    // Written next to the settings, so a layout problem with a plugin can be looked at.
+    void writeLayoutLog()
+    {
+        settings->getFile().getSiblingFile ("Head Tracking Host - plugin layout.log")
+            .replaceWithText (layoutLog.joinIntoString ("\n") + "\n");
     }
 
     void setPluginLayout()
@@ -1591,6 +1623,9 @@ private:
         const int wanted = jlimit (0, (int) layouts.size() - 1, layoutBox.getSelectedItemIndex());
         const int wantedChannels = layouts[(size_t) wanted].set.size();
         foldRearIntoSurround = false;
+        layoutLog.clear();
+        layoutLog.add ("Plugin: " + plugin->getName() + "  (wanted: " + layouts[(size_t) wanted].name + ")");
+        layoutLog.add ("Plugin's own layout: " + describeLayout (pluginDefaultLayout));
 
         auto accept = [&] (int i)
         {
@@ -1603,6 +1638,8 @@ private:
             }
             applyFold();
             updateDownmix();
+            layoutLog.add ("Result: " + activeLayout + " - " + describeLayout (plugin->getBusesLayout()));
+            writeLayoutLog();
         };
 
         // 1. The chosen layout, in every common arrangement.
@@ -1612,9 +1649,13 @@ private:
 
         // 2. The plugin's own arrangement, if it has the same number of channels.
         if (! pluginDefaultLayout.inputBuses.isEmpty()
-            && pluginDefaultLayout.inputBuses[0].size() == wantedChannels
-            && plugin->setBusesLayout (pluginDefaultLayout))
-            return accept (wanted);
+            && pluginDefaultLayout.inputBuses[0].size() == wantedChannels)
+        {
+            const bool ok = plugin->setBusesLayout (pluginDefaultLayout);
+            layoutLog.add ("  try plugin's own layout  ->  " + String (ok ? "OK" : "rejected"));
+            if (ok)
+                return accept (wanted);
+        }
 
         // 3. Other layouts: the closest smaller one first, then larger ones.
         std::vector<int> order;
@@ -1636,6 +1677,8 @@ private:
         activeLayout = "plugin default (" + String (plugin->getTotalNumInputChannels()) + " in)";
         applyFold();
         updateDownmix();
+        layoutLog.add ("Result: " + activeLayout + " - " + describeLayout (plugin->getBusesLayout()));
+        writeLayoutLog();
     }
 
     // Feeds the rear pair of a 7.1 source into the surround pair of a 5.1-only plugin.
@@ -2690,6 +2733,7 @@ private:
     std::vector<PluginEntry> installedPlugins;
     AudioProcessor::BusesLayout pluginDefaultLayout;
     bool foldRearIntoSurround = false;
+    StringArray layoutLog;
     KnownPluginList knownPlugins;
     std::unique_ptr<PluginDirectoryScanner> pluginScanner;
     String scanningPluginName;
