@@ -122,16 +122,20 @@ The EQ is minimum-phase (IIR) and adds **no latency** – important with head tr
 
 ## Hearing protection
 
-- After every start, audio device change or automatic reconnect the sound fades in over 2 seconds.
+- After every start, audio device change or reconnect the sound fades in over 2 seconds.
 - If a loopback device (e.g. BlackHole, VB-Cable) is input **and** output – including FlexASIO's
   configured devices – the output stays muted and the app shows a warning.
 
-## Automatic reconnect
+## Auto-reconnect audio device
 
-If the audio device really stops – e.g. it was closed by the system, another program changed the
-sample rate, or the device was briefly disconnected – Head Tracking Host reopens it automatically
-(status: "Audio device reconnected"), with a soft fade-in. A device that just delivers silence
-(e.g. FlexASIO while nothing is playing) is left alone and continues by itself when audio starts.
+Off by default. If the audio device stops unexpectedly after it was running (closed by the system,
+sample rate changed by another program, briefly disconnected), the status shows **Audio device
+stopped** – click **Audio settings...** to reconnect.
+
+With the switch **Auto-reconnect audio device** on, Head Tracking Host instead tries to reopen
+your saved device every few seconds until it works (never another device), with a soft fade-in.
+The program may pause briefly during each attempt. A device that just delivers silence (e.g.
+FlexASIO while nothing is playing) or that was not open at start is left alone.
 
 ## Safe start
 

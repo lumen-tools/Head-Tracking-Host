@@ -1011,6 +1011,18 @@ public:
         zoomBox.setTooltip ("Plugin zoom - works with plugins that support scaling.");
         zoomBox.onChange = [this] { applyZoom(); };
 
+        sidebar.addAndMakeVisible (reconnectButton);
+        reconnectButton.getProperties().set ("switch", true);
+        reconnectButton.setToggleState (settings->getBoolValue ("autoReconnect", false), dontSendNotification);
+        reconnectButton.setTooltip ("If the audio device stops unexpectedly (after it was running), try to reopen it "
+                                    "every few seconds. The program may pause briefly during each attempt.");
+        reconnectButton.onClick = [this]
+        {
+            settings->setValue ("autoReconnect", reconnectButton.getToggleState());
+            recovering = false;
+            restartAttempts = 0;
+        };
+
         sidebar.addAndMakeVisible (foldButton);
         foldButton.getProperties().set ("switch", true);
         foldButton.setToggleState (settings->getBoolValue ("mixRearInto51", false), dontSendNotification);
@@ -1192,6 +1204,7 @@ public:
         layoutBox.setBounds (row ("Input"));
         channelsButton.setBounds (row ("Channels"));
         foldButton.setBounds (switchArea (row ("Mix 7.1 rear into 5.1", 200)));
+        reconnectButton.setBounds (switchArea (row ("Auto-reconnect audio device", 220)));
         zoomBox.setBounds (row ("Plugin zoom"));
         endGroup();
 
@@ -1870,6 +1883,8 @@ private:
         // Any device change (by the user or the watchdog) starts a new grace period.
         audioStartTime = lastCallbackTime = Time::getMillisecondCounter();
         streamWasRunning = false;
+        if (auto* d = deviceManager.getCurrentAudioDevice(); d != nullptr && d->isPlaying())
+            deviceStoppedUnexpectedly = false; // a device was (re)opened
         checkFeedback();
     }
 
@@ -2013,6 +2028,7 @@ private:
         {
             lastCallbackCount = count;
             lastCallbackTime = now;
+            deviceStoppedUnexpectedly = false;
             if (now - audioStartTime > 1000)
                 streamWasRunning = true;   // ran on its own for a moment - a real, started stream
             if (recovering && now - lastRestartAttempt > 10000)
@@ -2043,6 +2059,17 @@ private:
         // Never give up: FlexASIO (and other drivers) deliver nothing while no audio is playing and can
         // only restart once something plays again. Keep retrying quietly; the grace period after each
         // attempt spaces the retries ~5 s apart.
+        // Without "Auto-reconnect" nothing is reopened automatically: an unexpected stop is only shown.
+        if (! reconnectButton.getToggleState())
+        {
+            if (! inGrace && (stalled || lost))
+            {
+                deviceStoppedUnexpectedly = true;
+                streamWasRunning = false; // shown once; cleared when audio runs or the device is changed
+            }
+            return;
+        }
+
         if (inGrace)
             return;
         if (! (stalled || lost || stillDown || (error && streamWasRunning)))
@@ -2057,9 +2084,9 @@ private:
         deviceManager.restartLastAudioDevice();
         if (deviceManager.getCurrentAudioDevice() == nullptr)
         {
-            // Fall back to the saved device setup (e.g. after the device was unplugged).
+            // Fall back to the saved device setup - never to another device.
             std::unique_ptr<XmlElement> saved (settings->getXmlValue ("audioDevice"));
-            deviceManager.initialise (microphoneDenied ? 0 : 16, 16, saved.get(), true);
+            deviceManager.initialise (microphoneDenied ? 0 : 16, 16, saved.get(), false);
         }
         audioStartTime = lastCallbackTime = Time::getMillisecondCounter();
         checkFeedback();
@@ -2104,6 +2131,11 @@ private:
         {
             c = red; status = "No access to audio input";
             detail = "Allow it in System Settings > Privacy & Security > Microphone > Head Tracking Host, then restart.";
+        }
+        else if (deviceStoppedUnexpectedly)
+        {
+            c = red; status = "Audio device stopped";
+            detail = "Click \"Audio settings...\" to reconnect, or turn on \"Auto-reconnect audio device\".";
         }
         else if (deviceManager.getCurrentAudioDevice() == nullptr)
         {
@@ -2763,7 +2795,8 @@ private:
     AudioProcessor::BusesLayout pluginDefaultLayout;
     bool foldRearIntoSurround = false; // a 7.1 source feeds a plugin that only takes 5.1
     String activeLayoutBase;
-    ToggleButton foldButton;
+    ToggleButton foldButton, reconnectButton;
+    bool deviceStoppedUnexpectedly = false;
 
     KnownPluginList knownPlugins;
     String scanningPluginName;
