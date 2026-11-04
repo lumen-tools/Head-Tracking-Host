@@ -1204,7 +1204,7 @@ public:
         layoutBox.setBounds (row ("Input"));
         channelsButton.setBounds (row ("Channels"));
         foldButton.setBounds (switchArea (row ("Mix 7.1 rear into 5.1", 200)));
-        reconnectButton.setBounds (switchArea (row ("Auto-reconnect audio device", 220)));
+        reconnectButton.setBounds (switchArea (row ("Auto-reconnect audio device", 200)));
         zoomBox.setBounds (row ("Plugin zoom"));
         endGroup();
 
