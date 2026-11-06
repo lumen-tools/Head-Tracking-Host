@@ -137,6 +137,21 @@ your saved device every few seconds until it works (never another device), with 
 The program may pause briefly during each attempt. A device that just delivers silence (e.g.
 FlexASIO while nothing is playing) or that was not open at start is left alone.
 
+## FlexASIO start sound (Windows)
+
+FlexASIO only starts when its input already receives audio – normally you have to start playing
+music into e.g. **VB-Audio Hi-Fi Cable** first, and only then open Head Tracking Host or choose
+FlexASIO in **Audio settings...**.
+
+With the switch **FlexASIO start sound** on (group **Global (all plugins)**, off by default), the
+app does that for you: whenever FlexASIO is opened – at program start with FlexASIO as the saved
+device, or when you choose it in Audio settings – it plays a short, very quiet burst of soft noise
+(about half a second) into the playback side of FlexASIO's input (e.g. *Hi-Fi Cable Input* for
+*Hi-Fi Cable Output*, taken from `FlexASIO.toml`). FlexASIO starts right away; afterwards nothing
+more is played. Automatic reconnects (Auto-reconnect) play no sound.
+
+Unlike the per-plugin settings, this switch is global: it applies to every plugin.
+
 ## Safe start
 
 If the previous start did not complete (freeze or crash), the next start opens neither the saved
