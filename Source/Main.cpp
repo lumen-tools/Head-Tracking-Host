@@ -2218,7 +2218,7 @@ private:
         if (trackingButton.getToggleState())
             return;
         for (size_t i = 0; i < 3; ++i)
-            applyAxisDegrees (i, 0.0f);
+            applyAxisDegrees (i, 0.0f, true);
         lastAngles = {};          // head indicator shows straight ahead too
         headIndicator.repaint();
     }
@@ -2269,7 +2269,10 @@ private:
         applyAxisDegrees (i, invertButtons[i].getToggleState() ? -rawDegrees : rawDegrees);
     }
 
-    void applyAxisDegrees (size_t i, float degrees)
+    // force: set the value even if the cached parameter value already matches. After a plugin state
+    // is loaded, the host's cached value can be out of date (the plugin may not report the restored
+    // value), so the check would skip the reset and leave the old angle in the plugin.
+    void applyAxisDegrees (size_t i, float degrees, bool force = false)
     {
         {
             auto& a = params[i];
@@ -2284,7 +2287,7 @@ private:
                 d = lo + std::fmod (std::fmod (d - lo, 360.0f) + 360.0f, 360.0f);
             }
             const float norm = jlimit (0.0f, 1.0f, (d - a.low) / span);
-            if (std::abs (norm - a.param->getValue()) > 1.0e-6f)
+            if (force || std::abs (norm - a.param->getValue()) > 1.0e-6f)
                 a.param->setValueNotifyingHost (norm);
         }
     }
