@@ -70,7 +70,8 @@ click, **Reset (1:1)** restores the normal order. On the **Mac** this is not nee
 corrected this in a plugin's own matrix before, set that matrix back to normal.)
 
 **Without head tracking:** untick **Head tracking**. The app stops listening to Bridgehead,
-frees the port, sets Yaw/Pitch/Roll to 0° and leaves the plugin's knobs to you.
+frees the port, sets Yaw/Pitch/Roll to 0° and leaves the plugin's knobs to you. This also applies
+at every start and plugin load while head tracking is off, so no old angles remain.
 
 ## Window
 
