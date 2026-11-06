@@ -1898,6 +1898,11 @@ private:
 
         setPluginLayout();
         setupAxisSelection();
+        // The saved plugin state may hold old head tracking angles. Again a moment later for plugins
+        // that apply their restored state with a delay.
+        centreAxesIfTrackingOff();
+        Timer::callAfterDelay (500, [safe = Component::SafePointer<MainComponent> (this)]
+                               { if (safe != nullptr) safe->centreAxesIfTrackingOff(); });
 
         engine.setPlugin (plugin.get());
         deviceManager.addAudioCallback (&engine);
@@ -2203,9 +2208,19 @@ private:
     {
         settings->setValue ("headTracking", on);
         applyPort();
-        if (! on)
-            for (size_t i = 0; i < 3; ++i)
-                applyAxisDegrees (i, 0.0f);   // look straight ahead
+        centreAxesIfTrackingOff();
+    }
+
+    // Head tracking off: every axis looks straight ahead (0 degrees) - also after loading a plugin,
+    // whose saved state still holds the angles from the last time head tracking was on.
+    void centreAxesIfTrackingOff()
+    {
+        if (trackingButton.getToggleState())
+            return;
+        for (size_t i = 0; i < 3; ++i)
+            applyAxisDegrees (i, 0.0f);
+        lastAngles = {};          // head indicator shows straight ahead too
+        headIndicator.repaint();
     }
 
     static bool numberAt (const OSCMessage& m, int index, float& out)
