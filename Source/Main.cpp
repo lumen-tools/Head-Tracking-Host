@@ -228,6 +228,254 @@ std::pair<String, String> readFlexAsioDevices()
     return { input, output };
 }
 
+#if JUCE_WINDOWS
+//==============================================================================
+// FlexASIO only starts when its input already receives audio (e.g. the VB-Audio Hi-Fi Cable that the
+// music is played into). With "FlexASIO start sound" on, every deliberate opening of FlexASIO - app start
+// with FlexASIO as the saved device, or choosing it in Audio settings - first plays a short, very quiet
+// noise burst into the playback side of that input, so the driver starts without playing music first.
+// Automatic reopening by the watchdog plays nothing.
+
+// The playback device that feeds a capture device:
+// "Hi-Fi Cable Output (VB-Audio Hi-Fi Cable)" -> "Hi-Fi Cable Input (VB-Audio Hi-Fi Cable)",
+// "Speakers (Realtek) [Loopback]" -> "Speakers (Realtek)".
+String playbackSideOf (const String& capture, const StringArray& outputs)
+{
+    if (capture.isEmpty())
+        return {};
+
+    const String loopbackSuffix (" [Loopback]");
+    if (capture.endsWithIgnoreCase (loopbackSuffix))
+    {
+        const auto name = capture.dropLastCharacters (loopbackSuffix.length()).trim();
+        for (auto& o : outputs)
+            if (o.equalsIgnoreCase (name))
+                return o;
+    }
+
+    // Same name with "Output" -> "Input" (MME cuts names short, so a prefix is enough).
+    const auto swapped = capture.replace ("Output", "Input");
+    if (swapped != capture)
+        for (auto& o : outputs)
+            if (o.startsWithIgnoreCase (swapped))
+                return o;
+
+    // Same driver in brackets, e.g. "(VB-Audio Hi-Fi Cable)", on its input side.
+    const auto driver = capture.fromLastOccurrenceOf ("(", true, false).upToFirstOccurrenceOf (")", true, false);
+    if (driver.length() > 2)
+        for (auto& o : outputs)
+            if (o.containsIgnoreCase (driver) && o.containsIgnoreCase ("Input"))
+                return o;
+    return {};
+}
+
+// A short, very quiet burst of soft white noise (about half a second, faded in and out).
+class StartSound : private AudioIODeviceCallback
+{
+public:
+    ~StartSound() override { stop(); }
+
+    // Starts the noise on the playback side of FlexASIO's input. False if that device was not found.
+    bool start()
+    {
+        stop();
+        if (wasapi == nullptr)
+            wasapi.reset (AudioIODeviceType::createAudioIODeviceType_WASAPI (WASAPIDeviceMode::shared));
+        if (wasapi == nullptr)
+            return false;
+
+        wasapi->scanForDevices();
+        auto capture = readFlexAsioDevices().first;
+        if (capture.isEmpty()) // FlexASIO uses the default recording device
+            capture = wasapi->getDeviceNames (true)[wasapi->getDefaultDeviceIndex (true)];
+
+        const auto target = playbackSideOf (capture, wasapi->getDeviceNames (false));
+        if (target.isEmpty())
+            return false;
+
+        device.reset (wasapi->createDevice (target, {}));
+        if (device == nullptr)
+            return false;
+
+        BigInteger outputs;
+        outputs.setRange (0, jlimit (1, 2, device->getOutputChannelNames().size()), true);
+        const auto rates = device->getAvailableSampleRates();
+        const double rate = rates.contains (48000.0) || rates.isEmpty() ? 48000.0 : rates[0];
+        if (device->open ({}, outputs, rate, device->getDefaultBufferSize()).isNotEmpty())
+        {
+            device.reset();
+            return false;
+        }
+        device->start (this);
+        return true;
+    }
+
+    void stop()
+    {
+        if (device != nullptr)
+        {
+            device->stop();
+            device->close();
+            device.reset();
+        }
+    }
+
+private:
+    void audioDeviceAboutToStart (AudioIODevice* d) override
+    {
+        position = 0;
+        length = jmax (1, (int) (d->getCurrentSampleRate() * 0.5));
+    }
+
+    void audioDeviceStopped() override {}
+
+    void audioDeviceIOCallbackWithContext (const float* const*, int, float* const* out, int numOut, int numSamples,
+                                           const AudioIODeviceCallbackContext&) override
+    {
+        for (int i = 0; i < numSamples; ++i, ++position)
+        {
+            float s = 0.0f;
+            if (position < length)
+            {
+                // Raised-cosine envelope over the whole burst: a soft "shh" without clicks.
+                const auto env = 0.5f - 0.5f * std::cos (MathConstants<float>::twoPi * (float) position / (float) length);
+                s = gain * env * (random.nextFloat() * 2.0f - 1.0f);
+            }
+            for (int ch = 0; ch < numOut; ++ch)
+                if (out[ch] != nullptr)
+                    out[ch][i] = s;
+        }
+    }
+
+    static constexpr float gain = 0.004f; // peak about -48 dBFS
+    std::unique_ptr<AudioIODeviceType> wasapi;
+    std::unique_ptr<AudioIODevice> device;
+    Random random;
+    int position = 0, length = 1;
+};
+
+struct FlexAsioStart
+{
+    bool enabled = false;     // global switch "FlexASIO start sound"
+    bool suppressed = false;  // automatic reopen by the watchdog: no sound
+    int generation = 0;
+    StartSound sound;
+};
+
+// Wraps JUCE's ASIO device: plays the start sound while FlexASIO is being opened (and started).
+class StartingAsioDevice : public AudioIODevice
+{
+public:
+    StartingAsioDevice (std::unique_ptr<AudioIODevice> d, std::shared_ptr<FlexAsioStart> s)
+        : AudioIODevice (d->getName(), d->getTypeName()), inner (std::move (d)), starter (std::move (s)) {}
+
+    AudioIODevice& getInner() { return *inner; }
+
+    String open (const BigInteger& ins, const BigInteger& outs, double rate, int block) override
+    {
+        const bool withSound = starter->enabled && ! starter->suppressed
+                               && getName().containsIgnoreCase ("FlexASIO") && starter->sound.start();
+        if (! withSound)
+            return inner->open (ins, outs, rate, block);
+
+        const int generation = ++starter->generation;
+        Thread::sleep (250); // let the noise reach FlexASIO's input first
+        const auto error = inner->open (ins, outs, rate, block); // also starts the driver
+        Timer::callAfterDelay (1000, [weak = std::weak_ptr<FlexAsioStart> (starter), generation]
+                               {
+                                   if (auto s = weak.lock(); s != nullptr && s->generation == generation)
+                                       s->sound.stop();
+                               });
+        return error;
+    }
+
+    void close() override                                  { inner->close(); }
+    bool isOpen() override                                 { return inner->isOpen(); }
+    void start (AudioIODeviceCallback* c) override         { inner->start (c); }
+    void stop() override                                   { inner->stop(); }
+    bool isPlaying() override                              { return inner->isPlaying(); }
+    String getLastError() override                         { return inner->getLastError(); }
+    StringArray getOutputChannelNames() override           { return inner->getOutputChannelNames(); }
+    StringArray getInputChannelNames() override            { return inner->getInputChannelNames(); }
+    std::optional<BigInteger> getDefaultOutputChannels() const override { return inner->getDefaultOutputChannels(); }
+    std::optional<BigInteger> getDefaultInputChannels() const override  { return inner->getDefaultInputChannels(); }
+    Array<double> getAvailableSampleRates() override       { return inner->getAvailableSampleRates(); }
+    Array<int> getAvailableBufferSizes() override          { return inner->getAvailableBufferSizes(); }
+    int getDefaultBufferSize() override                    { return inner->getDefaultBufferSize(); }
+    int getCurrentBufferSizeSamples() override             { return inner->getCurrentBufferSizeSamples(); }
+    double getCurrentSampleRate() override                 { return inner->getCurrentSampleRate(); }
+    int getCurrentBitDepth() override                      { return inner->getCurrentBitDepth(); }
+    BigInteger getActiveOutputChannels() const override    { return inner->getActiveOutputChannels(); }
+    BigInteger getActiveInputChannels() const override     { return inner->getActiveInputChannels(); }
+    int getOutputLatencyInSamples() override               { return inner->getOutputLatencyInSamples(); }
+    int getInputLatencyInSamples() override                { return inner->getInputLatencyInSamples(); }
+    AudioWorkgroup getWorkgroup() const override           { return inner->getWorkgroup(); }
+    bool hasControlPanel() const override                  { return inner->hasControlPanel(); }
+    bool showControlPanel() override                       { return inner->showControlPanel(); }
+    bool setAudioPreprocessingEnabled (bool b) override    { return inner->setAudioPreprocessingEnabled (b); }
+    int getXRunCount() const noexcept override             { return inner->getXRunCount(); }
+
+private:
+    std::unique_ptr<AudioIODevice> inner;
+    std::shared_ptr<FlexAsioStart> starter;
+};
+
+class StartingAsioType : public AudioIODeviceType, private AudioIODeviceType::Listener
+{
+public:
+    StartingAsioType (std::unique_ptr<AudioIODeviceType> t, std::shared_ptr<FlexAsioStart> s)
+        : AudioIODeviceType (t->getTypeName()), inner (std::move (t)), starter (std::move (s))
+    {
+        inner->addListener (this);
+    }
+
+    ~StartingAsioType() override { inner->removeListener (this); }
+
+    void scanForDevices() override                               { inner->scanForDevices(); }
+    StringArray getDeviceNames (bool forInput) const override    { return inner->getDeviceNames (forInput); }
+    int getDefaultDeviceIndex (bool forInput) const override     { return inner->getDefaultDeviceIndex (forInput); }
+    bool hasSeparateInputsAndOutputs() const override            { return inner->hasSeparateInputsAndOutputs(); }
+
+    int getIndexOfDevice (AudioIODevice* d, bool asInput) const override
+    {
+        if (auto* wrapped = dynamic_cast<StartingAsioDevice*> (d))
+            d = &wrapped->getInner();
+        return inner->getIndexOfDevice (d, asInput);
+    }
+
+    AudioIODevice* createDevice (const String& output, const String& input) override
+    {
+        std::unique_ptr<AudioIODevice> d (inner->createDevice (output, input));
+        return d != nullptr ? new StartingAsioDevice (std::move (d), starter) : nullptr;
+    }
+
+private:
+    void audioDeviceListChanged() override { callDeviceChangeListeners(); }
+
+    std::unique_ptr<AudioIODeviceType> inner;
+    std::shared_ptr<FlexAsioStart> starter;
+};
+
+class HostDeviceManager : public AudioDeviceManager
+{
+public:
+    std::shared_ptr<FlexAsioStart> flexAsioStart = std::make_shared<FlexAsioStart>();
+
+    void createAudioDeviceTypes (OwnedArray<AudioIODeviceType>& types) override
+    {
+        AudioDeviceManager::createAudioDeviceTypes (types);
+        for (int i = 0; i < types.size(); ++i)
+            if (types[i]->getTypeName() == "ASIO")
+            {
+                std::unique_ptr<AudioIODeviceType> asio (types.removeAndReturn (i));
+                types.insert (i, new StartingAsioType (std::move (asio), flexAsioStart));
+            }
+    }
+};
+#else
+using HostDeviceManager = AudioDeviceManager;
+#endif
+
 float parseDegrees (const String& text)
 {
     return text.retainCharacters ("-0123456789.").getFloatValue();
@@ -1023,6 +1271,23 @@ public:
             restartAttempts = 0;
         };
 
+       #if JUCE_WINDOWS
+        sidebar.addAndMakeVisible (startSoundButton);
+        startSoundButton.getProperties().set ("switch", true);
+        startSoundButton.setToggleState (settings->getBoolValue ("flexAsioStartSound", false), dontSendNotification);
+        startSoundButton.setTooltip ("Global setting - applies to all plugins. FlexASIO only starts when its input "
+                                     "already receives audio. With this on, a short, very quiet noise is played into "
+                                     "FlexASIO's input (e.g. VB-Audio Hi-Fi Cable) whenever FlexASIO is opened - at "
+                                     "program start or when choosing it in Audio settings - so nothing has to be "
+                                     "playing beforehand.");
+        deviceManager.flexAsioStart->enabled = startSoundButton.getToggleState();
+        startSoundButton.onClick = [this]
+        {
+            settings->setValue ("flexAsioStartSound", startSoundButton.getToggleState());
+            deviceManager.flexAsioStart->enabled = startSoundButton.getToggleState();
+        };
+       #endif
+
         sidebar.addAndMakeVisible (foldButton);
         foldButton.getProperties().set ("switch", true);
         foldButton.setToggleState (settings->getBoolValue ("mixRearInto51", false), dontSendNotification);
@@ -1207,6 +1472,13 @@ public:
         reconnectButton.setBounds (switchArea (row ("Auto-reconnect audio device", 200)));
         zoomBox.setBounds (row ("Plugin zoom"));
         endGroup();
+
+       #if JUCE_WINDOWS
+        // Own group: unlike the plugin settings, this switch is the same for every plugin.
+        beginGroup ("GLOBAL (ALL PLUGINS)");
+        startSoundButton.setBounds (switchArea (row ("FlexASIO start sound", 200)));
+        endGroup();
+       #endif
 
         beginGroup ("HEAD TRACKING");
         trackingButton.setBounds (switchArea (row ("Head tracking", 200)));
@@ -2080,6 +2352,9 @@ private:
         recovering = true;
         streamWasRunning = false;
 
+       #if JUCE_WINDOWS
+        deviceManager.flexAsioStart->suppressed = true; // automatic reopen: no start sound
+       #endif
         deviceManager.closeAudioDevice();
         deviceManager.restartLastAudioDevice();
         if (deviceManager.getCurrentAudioDevice() == nullptr)
@@ -2088,6 +2363,9 @@ private:
             std::unique_ptr<XmlElement> saved (settings->getXmlValue ("audioDevice"));
             deviceManager.initialise (microphoneDenied ? 0 : 16, 16, saved.get(), false);
         }
+       #if JUCE_WINDOWS
+        deviceManager.flexAsioStart->suppressed = false;
+       #endif
         audioStartTime = lastCallbackTime = Time::getMillisecondCounter();
         checkFeedback();
     }
@@ -2785,7 +3063,7 @@ private:
     };
 
     std::unique_ptr<PropertiesFile> settings;
-    AudioDeviceManager deviceManager;
+    HostDeviceManager deviceManager;
     AudioPluginFormatManager formatManager;
     HostEngine engine;
     std::unique_ptr<AudioPluginInstance> plugin;
@@ -2795,7 +3073,7 @@ private:
     AudioProcessor::BusesLayout pluginDefaultLayout;
     bool foldRearIntoSurround = false; // a 7.1 source feeds a plugin that only takes 5.1
     String activeLayoutBase;
-    ToggleButton foldButton, reconnectButton;
+    ToggleButton foldButton, reconnectButton, startSoundButton;
     bool deviceStoppedUnexpectedly = false;
 
     KnownPluginList knownPlugins;
