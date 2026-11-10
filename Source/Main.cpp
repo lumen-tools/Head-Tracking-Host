@@ -1,12 +1,14 @@
 // Head Tracking Host
+// Copyright (C) 2026 lumen-tools and contributors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Hosts a VST3 plugin (e.g. APL Virtuoso) and turns three of its parameters (yaw, pitch, roll)
-// with head tracking from Bridgehead (profile "IEM Scene Rotator YPR"). Driving the plugin's own knobs
-// avoids the crackling some renderers produce on their OSC head tracking input.
+// with head tracking received as OSC in the IEM SceneRotator format (/SceneRotator/yaw, /pitch,
+// /roll), e.g. from Supperware's Bridgehead.
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_osc/juce_osc.h>
+#include "BinaryData.h"
 
 #include <array>
 #include <atomic>
@@ -22,7 +24,7 @@ void requestMicrophoneAccess (std::function<void (bool)> callback); // Microphon
 namespace
 {
 constexpr int numEqSlots = 5;
-constexpr int defaultOscPort = 9000; // Bridgehead profile "IEM Scene Rotator YPR"
+constexpr int defaultOscPort = 9000; // port of the IEM SceneRotator format (e.g. Bridgehead profile "IEM Scene Rotator YPR")
 constexpr int minWidth = 900;
 constexpr int barHeight = 268;
 const String autoEqBase ("https://raw.githubusercontent.com/jaakkopasanen/AutoEq/master/results/");
@@ -1140,6 +1142,8 @@ public:
         browseButton.onClick = [this] { browseForPlugin(); };
         sidebar.addAndMakeVisible (audioButton);
         audioButton.onClick = [this] { showAudioSettings(); };
+        sidebar.addAndMakeVisible (aboutButton);
+        aboutButton.onClick = [this] { showAbout(); };
 
         // (portLabel drawn by the sidebar)
         sidebar.addAndMakeVisible (portEditor);
@@ -1220,7 +1224,7 @@ public:
 
         sidebar.addAndMakeVisible (trackingButton);
         trackingButton.getProperties().set ("switch", true);
-        trackingButton.setTooltip ("Off: stops listening to Bridgehead, frees the port and sets Yaw/Pitch/Roll to 0 degrees.");
+        trackingButton.setTooltip ("Off: stops listening for head tracking, frees the port and sets Yaw/Pitch/Roll to 0 degrees.");
         trackingButton.setToggleState (settings->getBoolValue ("headTracking", true), dontSendNotification);
         trackingButton.onClick = [this] { setHeadTracking (trackingButton.getToggleState()); };
 
@@ -1482,7 +1486,7 @@ public:
 
         beginGroup ("HEAD TRACKING");
         trackingButton.setBounds (switchArea (row ("Head tracking", 200)));
-        portEditor.setBounds (row ("Bridgehead port").removeFromRight (80));
+        portEditor.setBounds (row ("OSC port").removeFromRight (80));
         const char* axes[] = { "Yaw", "Pitch", "Roll" };
         for (size_t i = 0; i < 3; ++i)
         {
@@ -1515,6 +1519,9 @@ public:
         meters.setBounds (group.getX() + inset, y + 10, group.getWidth() - 2 * inset, 96);
         y += 116;
         endGroup();
+
+        aboutButton.setBounds (pad, y, width - 2 * pad, 28);
+        y += 40;
 
         return y;
     }
@@ -2184,7 +2191,7 @@ private:
     }
 
     //==============================================================================
-    // OSC from Bridgehead
+    // OSC head tracking (IEM SceneRotator format)
     void applyPort()
     {
         const int port = jlimit (1, 65535, portEditor.getText().getIntValue());
@@ -2230,7 +2237,8 @@ private:
         return false;
     }
 
-    // Bridgehead profile "IEM Scene Rotator YPR": separate /SceneRotator/yaw, /pitch, /roll messages.
+    // IEM SceneRotator format: separate /SceneRotator/yaw, /pitch, /roll messages in degrees
+    // (e.g. Bridgehead profile "IEM Scene Rotator YPR").
     // That profile sign-flips pitch and roll; internally the tracker's raw angles are used.
     void oscMessageReceived (const OSCMessage& m) override
     {
@@ -3054,6 +3062,89 @@ private:
         o.launchAsync();
     }
 
+    // Version, license, source link and the license texts of the third-party code in the program.
+    void showAbout()
+    {
+        auto resource = [] (const char* fileName)
+        {
+            for (int i = 0; i < BinaryData::namedResourceListSize; ++i)
+                if (String (BinaryData::originalFilenames[i]) == fileName)
+                {
+                    int size = 0;
+                    if (auto* data = BinaryData::getNamedResource (BinaryData::namedResourceList[i], size))
+                        return String::fromUTF8 (data, size);
+                }
+            return String();
+        };
+
+        const String sourceUrl ("https://github.com/lumen-tools/Head-Tracking-Host");
+        String text;
+        text << JUCE_APPLICATION_NAME_STRING << " " << JUCE_APPLICATION_VERSION_STRING << "\n"
+             << "Copyright (C) 2026 lumen-tools and contributors\n\n"
+             << "This program is free software: you can redistribute it and/or modify it under the terms of the "
+                "GNU Affero General Public License as published by the Free Software Foundation, either version 3 "
+                "of the License, or (at your option) any later version.\n\n"
+             << "This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without "
+                "even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU "
+                "Affero General Public License below for more details.\n\n"
+             << "Source code: " << sourceUrl << "\n\n"
+             << "Third-party software in this program\n"
+             << "  - JUCE 8 (AGPLv3), modified at build time: VST3 shell plugins (e.g. Waves WaveShell) are\n"
+                "    looked up by class ID (see cmake/PatchJuceVst3ShellIndex.cmake, marked HTH_SHELL_INDEX_FIX)\n"
+             << "  - VST3 SDK (MIT), ASIO SDK (GPLv3), FLAC and Ogg Vorbis (BSD), HarfBuzz (Old MIT),\n"
+                "    SheenBidi (Apache 2.0), libpng and zlib (zlib licences), jpeglib (IJG licence)\n"
+             << "  - This software is based in part on the work of the Independent JPEG Group.\n\n"
+             << "Headphone correction profiles are downloaded at run time from AutoEq by Jaakko Pasanen\n"
+                "(https://github.com/jaakkopasanen/AutoEq, MIT licence).\n\n"
+             << "VST and ASIO are trademarks of Steinberg Media Technologies GmbH. Other product names belong to\n"
+                "their owners and are used only to describe compatibility; this project is not affiliated with them.\n"
+             << "\n##############################################################################\n"
+             << "Third-party license texts\n"
+             << "##############################################################################\n"
+             << resource ("ThirdPartyNotices.txt") << "\n"
+             << "\n##############################################################################\n"
+             << "GNU Affero General Public License v3\n"
+             << "##############################################################################\n\n"
+             << resource ("LICENSE");
+
+        struct AboutContent : public Component
+        {
+            AboutContent (const String& t, const String& url)
+            {
+                addAndMakeVisible (editor);
+                editor.setMultiLine (true);
+                editor.setReadOnly (true);
+                editor.setScrollbarsShown (true);
+                editor.setCaretVisible (false);
+                editor.setFont (FontOptions (13.0f));
+                editor.setText (t, false);
+                editor.moveCaretToTop (false);
+                addAndMakeVisible (link);
+                link.setButtonText ("Open the source code on GitHub");
+                link.setURL (URL (url));
+                setSize (640, 560);
+            }
+            void resized() override
+            {
+                auto r = getLocalBounds().reduced (12);
+                link.setBounds (r.removeFromBottom (28));
+                r.removeFromBottom (8);
+                editor.setBounds (r);
+            }
+            TextEditor editor;
+            HyperlinkButton link;
+        };
+
+        DialogWindow::LaunchOptions o;
+        o.content.setOwned (new AboutContent (text, sourceUrl));
+        o.dialogTitle = "About Head Tracking Host";
+        o.dialogBackgroundColour = panel;
+        o.escapeKeyTriggersCloseButton = true;
+        o.useNativeTitleBar = true;
+        o.resizable = true;
+        o.launchAsync();
+    }
+
     void showAudioSettings()
     {
         audioSettingsOpened = true;
@@ -3114,7 +3205,7 @@ private:
 
     Dot statusDot;
     Label statusLabel, detailLabel;
-    Label pluginLabel { {}, "Plugin" }, portLabel { {}, "Bridgehead port" }, layoutLabel { {}, "Input" };
+    Label pluginLabel { {}, "Plugin" }, portLabel { {}, "OSC port" }, layoutLabel { {}, "Input" };
     ComboBox pluginBox, layoutBox;
     TextButton channelsButton { "Channels..." };
     ToggleButton speakerSimButton;
@@ -3138,7 +3229,7 @@ private:
     Rectangle<int> cards[3];
     static constexpr int captionWidth = 112;
     std::vector<int> inputMap; // device input channel for each plugin input channel, -1 = off
-    TextButton browseButton { "Browse..." }, audioButton { "Audio settings..." };
+    TextButton browseButton { "Browse..." }, audioButton { "Audio settings..." }, aboutButton { "About & licenses" };
     TextEditor portEditor;
     std::array<Label, 3> axisLabels;
     std::array<ComboBox, 3> axisBoxes;
