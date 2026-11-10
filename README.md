@@ -38,13 +38,14 @@ Games / music / video (7.1)
 **Head trackers:** any tracker or app that sends the open OSC format of the
 [IEM SceneRotator](https://plugins.iem.at) works – for example the
 [Supperware Head Tracker](https://supperware.co.uk) with its Bridgehead app (profile
-**IEM Scene Rotator YPR**). All three variants are understood:
+**IEM Scene Rotator YPR**). All variants are understood:
 
 | OSC address | Values |
 |---|---|
 | `/SceneRotator/yaw`, `/SceneRotator/pitch`, `/SceneRotator/roll` | one angle per message, in degrees |
 | `/SceneRotator/ypr` | yaw, pitch, roll in one message, in degrees |
-| `/SceneRotator/quaternions` | w, x, y, z |
+| `/SceneRotator/quaternions` | w, x, y, z in one message |
+| `/SceneRotator/qw`, `/qx`, `/qy`, `/qz` | one quaternion component per message (e.g. Bridgehead profile **IEM Scene Rotator quaternion**) |
 
 ## Download
 
