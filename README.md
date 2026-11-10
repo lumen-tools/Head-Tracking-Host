@@ -80,7 +80,7 @@ The app is not commercially code-signed, so the system warns once:
 **3. Head Tracking Host**
 1. Start the app and pick your plugin from the **Plugin** list (or **Browse...**).
 2. **Audio settings...**: type **ASIO**, device **FlexASIO**, sample rate as your headphones,
-   buffer size e.g. 256. Enable inputs **1–8** and both outputs.
+   buffer size e.g. 256. Enable the inputs **IN 0 – IN 7**.
 3. Set **Input** to **7.1 (8 channels)**.
 4. Click **Channels** → **Swap side/rear (Windows)** – Windows delivers the side and rear
    surrounds in swapped order.
