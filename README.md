@@ -1,7 +1,7 @@
 # Head Tracking Host
 
-**A small, portable VST3 host for listening to speakers on headphones – with head tracking and
-headphone correction.**
+**A small, portable VST3 host for mixroom plugins on headphones, with head tracking and headphone
+correction.**
 
 Load a binaural room or speaker simulation plugin (e.g. APL Virtuoso, dearVR MONITOR, Waves Abbey
 Road Studio 3), send your system audio through it and let your head tracker turn the virtual room.
