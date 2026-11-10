@@ -1,7 +1,6 @@
 # Head Tracking Host
 
-Head tracking for binaural renderers such as **APL Virtuoso** with the **Supperware Head Tracker** –
-without the crackling.
+Head tracking for binaural renderers such as **APL Virtuoso** with the **Supperware Head Tracker**.
 
 Some renderers crackle on head movements when they get head tracking through their OSC input,
 while turning their Yaw/Pitch/Roll knobs does not. Head Tracking Host loads the renderer as a
