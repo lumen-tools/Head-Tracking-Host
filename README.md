@@ -17,7 +17,7 @@ Games / music / video (7.1)
 ## Features
 
 - **Hosts any VST3 plugin** – including plugins inside shell files such as Waves' WaveShell.
-- **Head tracking via OSC** in the IEM SceneRotator format. The app turns the plugin's own
+- **Head tracking via OSC** in the open IEM SceneRotator format (yaw/pitch/roll or quaternions). The app turns the plugin's own
   yaw / pitch / roll parameters, so it works with any plugin that has such controls.
 - **Headphone correction** with profiles from the [AutoEq](https://github.com/jaakkopasanen/AutoEq)
   database – zero latency, also usable on its own as a system-wide headphone EQ.
@@ -35,10 +35,16 @@ Games / music / video (7.1)
 | Plugin | a binaural / speaker simulation plugin as **VST3** | same |
 | Head tracker (optional) | anything that sends the **IEM SceneRotator** OSC format | same |
 
-**Head trackers:** any tracker or app that sends `/SceneRotator/yaw`, `/SceneRotator/pitch` and
-`/SceneRotator/roll` (angles in degrees, one message per axis) works – for example the
+**Head trackers:** any tracker or app that sends the open OSC format of the
+[IEM SceneRotator](https://plugins.iem.at) works – for example the
 [Supperware Head Tracker](https://supperware.co.uk) with its Bridgehead app (profile
-**IEM Scene Rotator YPR**). Combined `ypr` or quaternion messages are not supported.
+**IEM Scene Rotator YPR**). All three variants are understood:
+
+| OSC address | Values |
+|---|---|
+| `/SceneRotator/yaw`, `/SceneRotator/pitch`, `/SceneRotator/roll` | one angle per message, in degrees |
+| `/SceneRotator/ypr` | yaw, pitch, roll in one message, in degrees |
+| `/SceneRotator/quaternions` | w, x, y, z |
 
 ## Download
 
@@ -176,7 +182,7 @@ each attempt).
 |---|---|
 | **Port 9000 is in use** | Another program listens on that port – close it. |
 | **No head tracking data** | Start your head tracker app, or turn head tracking off. |
-| **Receiving … but no yaw/pitch/roll** | Your tracker sends another format – use the IEM SceneRotator yaw/pitch/roll messages. |
+| **Receiving … but no yaw/pitch/roll** | Your tracker sends another format – switch it to the IEM SceneRotator format. |
 | **Output muted: input and output are the same loopback device** | Choose your headphones as output (in FlexASIO GUI on Windows). |
 | **Audio device stopped** | Click *Audio settings...* or turn on *Auto-reconnect audio device*. |
 | No sound at all | Check the enabled channels in *Audio settings...*; on the Mac check microphone access. |

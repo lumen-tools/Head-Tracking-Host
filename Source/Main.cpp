@@ -2237,9 +2237,11 @@ private:
         return false;
     }
 
-    // IEM SceneRotator format: separate /SceneRotator/yaw, /pitch, /roll messages in degrees
-    // (e.g. Bridgehead profile "IEM Scene Rotator YPR").
-    // That profile sign-flips pitch and roll; internally the tracker's raw angles are used.
+    // IEM SceneRotator OSC format (IEM Plug-in Suite, open source), all three variants:
+    //   /SceneRotator/yaw, /pitch, /roll   one angle per message, degrees
+    //                                      (e.g. Bridgehead profile "IEM Scene Rotator YPR")
+    //   /SceneRotator/ypr                  yaw, pitch, roll in one message, degrees
+    //   /SceneRotator/quaternions          qw, qx, qy, qz
     void oscMessageReceived (const OSCMessage& m) override
     {
         ++messagesReceived;
@@ -2248,22 +2250,55 @@ private:
 
         if (! trackingButton.getToggleState())
             return;
-        float value = 0.0f;
-        if (m.size() != 1 || ! numberAt (m, 0, value))
-            return;
+
+        std::array<float, 4> v {};
+        for (int n = 0; n < jmin (4, (int) m.size()); ++n)
+            if (! numberAt (m, n, v[(size_t) n]))
+                return;
 
         const auto lower = address.toLowerCase();
         for (size_t i = 0; i < 3; ++i)
+            if (m.size() == 1 && lower == "/scenerotator/" + String (axisNames[i]).toLowerCase())
+                setTrackedAngle (i, v[0], true);
+
+        if (m.size() == 3 && lower == "/scenerotator/ypr")
+            for (size_t i = 0; i < 3; ++i)
+                setTrackedAngle (i, v[i], true);
+
+        if (m.size() == 4 && lower == "/scenerotator/quaternions")
         {
-            if (lower == "/scenerotator/" + String (axisNames[i]).toLowerCase())
-            {
-                noteAngles();
-                // Normal orientation = IEM Scene Rotator / Virtuoso convention. The IEM profile's
-                // roll is flipped relative to that convention, pitch already matches.
-                applyAxis (i, i == 2 ? -value : value);
-                lastAngles[i] = i == 2 ? -value : value;
-            }
+            const auto ypr = quaternionToYawPitchRoll (v[0], v[1], v[2], v[3]);
+            for (size_t i = 0; i < 3; ++i)
+                setTrackedAngle (i, ypr[i], false);
         }
+    }
+
+    // Normal orientation = IEM SceneRotator / Virtuoso convention. Angles sent as yaw/pitch/roll
+    // (single messages or /ypr) have their roll flipped relative to that convention (as Bridgehead's
+    // IEM profile sends them); pitch already matches. Quaternions are converted in the convention.
+    void setTrackedAngle (size_t axis, float degrees, bool flipRoll)
+    {
+        const float value = axis == 2 && flipRoll ? -degrees : degrees;
+        noteAngles();
+        applyAxis (axis, value);
+        lastAngles[axis] = value;
+    }
+
+    // Quaternion -> yaw, pitch, roll in degrees, as the IEM SceneRotator does it (yaw -> pitch -> roll).
+    static std::array<float, 3> quaternionToYawPitchRoll (float qw, float qx, float qy, float qz)
+    {
+        const float norm = std::sqrt (qw * qw + qx * qx + qy * qy + qz * qz);
+        if (norm <= 0.0f)
+            return { 0.0f, 0.0f, 0.0f };
+        const float p0 = qw / norm, p1 = qz / norm, p2 = qy / norm, p3 = qx / norm;
+
+        std::array<float, 3> ypr {};
+        ypr[1] = std::asin (jlimit (-1.0f, 1.0f, 2.0f * (p0 * p2 + p1 * p3)));
+        ypr[0] = std::atan2 (2.0f * (p0 * p1 - p2 * p3), 1.0f - 2.0f * (p1 * p1 + p2 * p2));
+        ypr[2] = std::atan2 (2.0f * (p0 * p3 - p1 * p2), 1.0f - 2.0f * (p2 * p2 + p3 * p3));
+        for (auto& a : ypr)
+            a = radiansToDegrees (a);
+        return ypr;
     }
 
     void noteAngles()
@@ -2467,7 +2502,7 @@ private:
         else if (trackingNeeded && ! receivingAngles && receivingAnything)
         {
             c = amber; status = "Receiving " + lastAddress + " - but no yaw/pitch/roll";
-            detail = "Send /SceneRotator/yaw, /pitch and /roll (Bridgehead: profile \"IEM Scene Rotator YPR\").";
+            detail = "Send the IEM SceneRotator format: /SceneRotator/yaw, /pitch, /roll, /ypr or /quaternions.";
         }
         else if (trackingNeeded && ! receivingAngles)
         {
