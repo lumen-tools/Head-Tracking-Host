@@ -2237,13 +2237,10 @@ private:
         return false;
     }
 
-    // IEM SceneRotator OSC format (IEM Plug-in Suite, open source), all three variants:
+    // IEM SceneRotator OSC format (IEM Plug-in Suite, open source), yaw/pitch/roll in degrees:
     //   /SceneRotator/yaw, /pitch, /roll   one angle per message, degrees
     //                                      (e.g. Bridgehead profile "IEM Scene Rotator YPR")
     //   /SceneRotator/ypr                  yaw, pitch, roll in one message, degrees
-    //   /SceneRotator/quaternions          qw, qx, qy, qz in one message
-    //   /SceneRotator/qw, /qx, /qy, /qz    one quaternion component per message
-    //                                      (e.g. Bridgehead profile "IEM Scene Rotator quaternion")
     void oscMessageReceived (const OSCMessage& m) override
     {
         ++messagesReceived;
@@ -2261,63 +2258,21 @@ private:
         const auto lower = address.toLowerCase();
         for (size_t i = 0; i < 3; ++i)
             if (m.size() == 1 && lower == "/scenerotator/" + String (axisNames[i]).toLowerCase())
-                setTrackedAngle (i, v[0], true);
+                setTrackedAngle (i, v[0]);
 
         if (m.size() == 3 && lower == "/scenerotator/ypr")
             for (size_t i = 0; i < 3; ++i)
-                setTrackedAngle (i, v[i], true);
-
-        if (m.size() == 4 && lower == "/scenerotator/quaternions")
-            setTrackedQuaternion (v[0], v[1], v[2], v[3]);
-
-        // Single components: collect them and turn the head once all four of a frame have arrived.
-        const char* components[] = { "qw", "qx", "qy", "qz" };
-        for (int c = 0; c < 4; ++c)
-            if (m.size() == 1 && lower == String ("/scenerotator/") + components[c])
-            {
-                quaternionParts[(size_t) c] = v[0];
-                quaternionPartsReceived |= 1 << c;
-                if (quaternionPartsReceived == 0xf)
-                {
-                    quaternionPartsReceived = 0;
-                    setTrackedQuaternion (quaternionParts[0], quaternionParts[1], quaternionParts[2], quaternionParts[3]);
-                }
-            }
+                setTrackedAngle (i, v[i]);
     }
 
-    void setTrackedQuaternion (float qw, float qx, float qy, float qz)
+    // Normal orientation = IEM SceneRotator / Virtuoso convention. The roll sent this way (e.g. by
+    // Bridgehead's IEM profile) is flipped relative to that convention; pitch already matches.
+    void setTrackedAngle (size_t axis, float degrees)
     {
-        const auto ypr = quaternionToYawPitchRoll (qw, qx, qy, qz);
-        for (size_t i = 0; i < 3; ++i)
-            setTrackedAngle (i, ypr[i], false);
-    }
-
-    // Normal orientation = IEM SceneRotator / Virtuoso convention. Angles sent as yaw/pitch/roll
-    // (single messages or /ypr) have their roll flipped relative to that convention (as Bridgehead's
-    // IEM profile sends them); pitch already matches. Quaternions are converted in the convention.
-    void setTrackedAngle (size_t axis, float degrees, bool flipRoll)
-    {
-        const float value = axis == 2 && flipRoll ? -degrees : degrees;
+        const float value = axis == 2 ? -degrees : degrees;
         noteAngles();
         applyAxis (axis, value);
         lastAngles[axis] = value;
-    }
-
-    // Quaternion -> yaw, pitch, roll in degrees, as the IEM SceneRotator does it (yaw -> pitch -> roll).
-    static std::array<float, 3> quaternionToYawPitchRoll (float qw, float qx, float qy, float qz)
-    {
-        const float norm = std::sqrt (qw * qw + qx * qx + qy * qy + qz * qz);
-        if (norm <= 0.0f)
-            return { 0.0f, 0.0f, 0.0f };
-        const float p0 = qw / norm, p1 = qz / norm, p2 = qy / norm, p3 = qx / norm;
-
-        std::array<float, 3> ypr {};
-        ypr[1] = std::asin (jlimit (-1.0f, 1.0f, 2.0f * (p0 * p2 + p1 * p3)));
-        ypr[0] = std::atan2 (2.0f * (p0 * p1 - p2 * p3), 1.0f - 2.0f * (p1 * p1 + p2 * p2));
-        ypr[2] = std::atan2 (2.0f * (p0 * p3 - p1 * p2), 1.0f - 2.0f * (p2 * p2 + p3 * p3));
-        for (auto& a : ypr)
-            a = radiansToDegrees (a);
-        return ypr;
     }
 
     void noteAngles()
@@ -2521,7 +2476,7 @@ private:
         else if (trackingNeeded && ! receivingAngles && receivingAnything)
         {
             c = amber; status = "Receiving " + lastAddress + " - but no yaw/pitch/roll";
-            detail = "Send the IEM SceneRotator format (yaw/pitch/roll or quaternion; e.g. Bridgehead profile \"IEM Scene Rotator YPR\").";
+            detail = "Send the IEM SceneRotator yaw/pitch/roll format (e.g. Bridgehead profile \"IEM Scene Rotator YPR\").";
         }
         else if (trackingNeeded && ! receivingAngles)
         {
@@ -3245,8 +3200,6 @@ private:
     std::unique_ptr<PluginScanThread> pluginScan;
     std::array<AxisParam, 3> params;
     String activeLayout, lastError, lastAddress;
-    std::array<float, 4> quaternionParts { 1.0f, 0.0f, 0.0f, 0.0f };
-    int quaternionPartsReceived = 0;
     bool feedbackRisk = false, microphoneDenied = false, audioInitialised = false;
     bool safeMode = false, startupCleared = false, audioSettingsOpened = false;
     bool streamWasRunning = false, recovering = false;

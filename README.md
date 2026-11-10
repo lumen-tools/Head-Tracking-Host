@@ -17,7 +17,7 @@ Games / music / video (7.1)
 ## Features
 
 - **Hosts any VST3 plugin** – including plugins inside shell files such as Waves' WaveShell.
-- **Head tracking via OSC** in the open IEM SceneRotator format (yaw/pitch/roll or quaternions). The app turns the plugin's own
+- **Head tracking via OSC** in the open IEM SceneRotator format (yaw/pitch/roll). The app turns the plugin's own
   yaw / pitch / roll parameters, so it works with any plugin that has such controls.
 - **Headphone correction** with profiles from the [AutoEq](https://github.com/jaakkopasanen/AutoEq)
   database – zero latency, also usable on its own as a system-wide headphone EQ.
@@ -38,14 +38,12 @@ Games / music / video (7.1)
 **Head trackers:** any tracker or app that sends the open OSC format of the
 [IEM SceneRotator](https://plugins.iem.at) works – for example the
 [Supperware Head Tracker](https://supperware.co.uk) with its Bridgehead app (profile
-**IEM Scene Rotator YPR**). All variants are understood:
+**IEM Scene Rotator YPR**). Both yaw/pitch/roll variants are understood (quaternions are not supported):
 
 | OSC address | Values |
 |---|---|
 | `/SceneRotator/yaw`, `/SceneRotator/pitch`, `/SceneRotator/roll` | one angle per message, in degrees |
 | `/SceneRotator/ypr` | yaw, pitch, roll in one message, in degrees |
-| `/SceneRotator/quaternions` | w, x, y, z in one message |
-| `/SceneRotator/qw`, `/qx`, `/qy`, `/qz` | one quaternion component per message (e.g. Bridgehead profile **IEM Scene Rotator quaternion**) |
 
 ## Download
 
