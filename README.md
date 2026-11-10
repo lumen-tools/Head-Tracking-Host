@@ -1,6 +1,6 @@
 # Head Tracking Host
 
-**A small, portable VST3 host for virtual speakers on headphones, with head tracking and
+**A small, portable VST3 host for listening to speakers on headphones – with head tracking and
 headphone correction.**
 
 Load a binaural room or speaker simulation plugin (e.g. APL Virtuoso, dearVR MONITOR, Waves Abbey
@@ -16,11 +16,11 @@ Games / music / video (7.1)
 
 ## Features
 
-- **Hosts any VST3 plugin**, including plugins inside shell files such as Waves' WaveShell.
+- **Hosts any VST3 plugin** – including plugins inside shell files such as Waves' WaveShell.
 - **Head tracking via OSC** in the open IEM SceneRotator format (yaw/pitch/roll). The app turns the plugin's own
   yaw / pitch / roll parameters, so it works with any plugin that has such controls.
 - **Headphone correction** with profiles from the [AutoEq](https://github.com/jaakkopasanen/AutoEq)
-  database. Zero latency, also usable on its own as a system-wide headphone EQ.
+  database – zero latency, also usable on its own as a system-wide headphone EQ.
 - **Up to 7.1.4 input**, free channel routing and a one-click fix for swapped Windows surrounds.
 - **Portable:** a single EXE (Windows) or app (Mac); settings are stored next to it.
 - **Safe by design:** soft fade-in, feedback protection for loopback devices, safe start after a
@@ -36,7 +36,7 @@ Games / music / video (7.1)
 | Head tracker (optional) | anything that sends the **IEM SceneRotator** OSC format | same |
 
 **Head trackers:** any tracker or app that sends the open OSC format of the
-[IEM SceneRotator](https://plugins.iem.at) works, for example the
+[IEM SceneRotator](https://plugins.iem.at) works – for example the
 [Supperware Head Tracker](https://supperware.co.uk) with its Bridgehead app (profile
 **IEM Scene Rotator YPR**). Both yaw/pitch/roll variants are understood (quaternions are not supported):
 
@@ -54,7 +54,7 @@ Get the latest version from **[Releases](../../releases)**:
 | Windows 10/11 | `HeadTrackingHost.exe` |
 | macOS | `HeadTrackingHost-macOS.zip` |
 
-Put the program in **its own folder**, because its settings file is stored next to it. To update, just
+Put the program in **its own folder** – its settings file is stored next to it. To update, just
 replace the EXE or app; your settings stay.
 
 The app is not commercially code-signed, so the system warns once:
@@ -80,9 +80,9 @@ The app is not commercially code-signed, so the system warns once:
 **3. Head Tracking Host**
 1. Start the app and pick your plugin from the **Plugin** list (or **Browse...**).
 2. **Audio settings...**: type **ASIO**, device **FlexASIO**, sample rate as your headphones,
-   buffer size e.g. 256. Enable the inputs **IN 0 to IN 7**.
+   buffer size e.g. 256. Enable the inputs **IN 0 – IN 7**.
 3. Set **Input** to **7.1 (8 channels)**.
-4. Click **Channels** → **Swap side/rear (Windows)**, because Windows delivers the side and rear
+4. Click **Channels** → **Swap side/rear (Windows)** – Windows delivers the side and rear
    surrounds in swapped order.
 5. Optional: turn on **FlexASIO start sound** (see [below](#flexasio-start-sound-windows)), so you
    don't have to start playback before opening the app.
@@ -137,9 +137,9 @@ accepts 5.1, **Mix 7.1 rear into 5.1** mixes the two extra 7.1 channels into its
 channels instead of dropping them.
 
 **Output.**
-- **Speaker simulation:** when off, you hear the input without the plugin (downmixed to stereo), handy
+- **Speaker simulation** – off: you hear the input without the plugin (downmixed to stereo), handy
   for A/B comparisons.
-- **Headphone correction:** choose one of five slots; **Edit...** opens the correction window:
+- **Headphone correction** – choose one of five slots; **Edit...** opens the correction window:
   search the AutoEq database (*Find in database...*, recommended measurement per headphone,
   *Show all measurements* for every source) or **import** an *EqualizerAPO ParametricEq* file
   from [autoeq.app](https://autoeq.app). Don't combine it with a correction inside the plugin
@@ -153,18 +153,18 @@ movement.
 good, yellow or red names the problem and what to do.
 
 **Without head tracking.** With **Head tracking** off, the app frees the port and sets the chosen
-yaw / pitch / roll parameters to 0° (also at every start and plugin load) and leaves the
+yaw / pitch / roll parameters to 0° – also at every start and plugin load – and leaves the
 plugin's controls to you.
 
 <a id="flexasio-start-sound-windows"></a>**FlexASIO start sound (Windows, off by default).**
 FlexASIO only starts once its input receives audio, so normally you have to start playback first.
 With this switch on (group *Global (all plugins)*), the app plays a short, very quiet burst of soft
 noise (about half a second) into the playback side of FlexASIO's input whenever FlexASIO is
-opened, at program start or when you choose it in *Audio settings...*. FlexASIO starts right
+opened – at program start or when you choose it in *Audio settings...*. FlexASIO starts right
 away; nothing else is played. Automatic reconnects play no sound.
 
 **Auto-reconnect audio device** (off by default). If the audio device stops unexpectedly, the
-status shows *Audio device stopped*. Click **Audio settings...** to reconnect. With the switch on,
+status shows *Audio device stopped* – click **Audio settings...** to reconnect. With the switch on,
 the app tries to reopen your saved device every few seconds instead (it may pause briefly during
 each attempt).
 
@@ -173,15 +173,15 @@ each attempt).
 - If a loopback device is used as input **and** output (also inside FlexASIO's configuration),
   the output stays muted and a warning is shown.
 - If the last start did not complete, the next one starts without the saved device and plugin
-  (*Safe start*). Choose them again, all settings are kept.
+  (*Safe start*) – choose them again, all settings are kept.
 
 ## Troubleshooting
 
 | Status | What to do |
 |---|---|
-| **Port 9000 is in use** | Another program listens on that port. Close it. |
+| **Port 9000 is in use** | Another program listens on that port – close it. |
 | **No head tracking data** | Start your head tracker app, or turn head tracking off. |
-| **Receiving … but no yaw/pitch/roll** | Your tracker sends another format. Switch it to the IEM SceneRotator format. |
+| **Receiving … but no yaw/pitch/roll** | Your tracker sends another format – switch it to the IEM SceneRotator format. |
 | **Output muted: input and output are the same loopback device** | Choose your headphones as output (in FlexASIO GUI on Windows). |
 | **Audio device stopped** | Click *Audio settings...* or turn on *Auto-reconnect audio device*. |
 | No sound at all | Check the enabled channels in *Audio settings...*; on the Mac check microphone access. |
@@ -202,8 +202,8 @@ cmake --build build --config Release
 
 ## License
 
-Head Tracking Host is free software under the **GNU Affero General Public License v3.0 or later**,
-see [LICENSE](LICENSE). Third-party software and its licenses are listed in
+Head Tracking Host is free software under the **GNU Affero General Public License v3.0 or later**
+– see [LICENSE](LICENSE). Third-party software and its licenses are listed in
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) and shown in the app under **About & licenses**.
 
 Head Tracking Host is an independent project and is not affiliated with or endorsed by Supperware,
@@ -213,7 +213,7 @@ respective owners.
 
 ## Credits
 
-- [lumen-tools](https://github.com/lumen-tools): idea, design and testing with real hardware
-- Claude (Anthropic): co-author of the code
-- [AutoEq](https://github.com/jaakkopasanen/AutoEq) by Jaakko Pasanen: headphone correction data
+- [lumen-tools](https://github.com/lumen-tools) – idea, design and testing with real hardware
+- Claude (Anthropic) – co-author of the code
+- [AutoEq](https://github.com/jaakkopasanen/AutoEq) by Jaakko Pasanen – headphone correction data
 - Built with [JUCE](https://juce.com)
