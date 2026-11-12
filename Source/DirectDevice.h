@@ -230,18 +230,20 @@ public:
         return rates;
     }
 
-    // The buffer size is the host's block size and the headphones' buffer; the input delivers in
-    // its own rhythm and is split into blocks of this size.
-    Array<int> getAvailableBufferSizes() override { return output->getAvailableBufferSizes(); }
-    int getDefaultBufferSize() override           { return output->getDefaultBufferSize(); }
+    // The usual audio buffer sizes. The chosen size is the host's block size (the input is split
+    // into blocks of it); the headphones get the nearest buffer they support, at least this size -
+    // the FIFO between them takes up the difference.
+    Array<int> getAvailableBufferSizes() override { return { 64, 128, 256, 512, 1024, 2048 }; }
+    int getDefaultBufferSize() override           { return 256; }
 
     String open (const BigInteger& ins, const BigInteger& outs, double rate, int bufferSize) override
     {
         close();
-        lastError = output->open ({}, outs, rate, bufferSize);
+        const int requested = bufferSize > 0 ? bufferSize : getDefaultBufferSize();
+        lastError = output->open ({}, outs, rate, outputBufferFor (requested));
         if (lastError.isEmpty() && input != nullptr && ! ins.isZero())
         {
-            lastError = input->open (ins, {}, rate, bufferSize);
+            lastError = input->open (ins, {}, rate, outputBufferFor (requested));
             if (lastError.isEmpty()
                 && std::abs (input->getCurrentSampleRate() - output->getCurrentSampleRate()) > 0.5)
             {
@@ -262,7 +264,7 @@ public:
         const int numOut = output->getActiveOutputChannels().countNumberOfSetBits();
         const int inputBlock = inputOpen ? input->getCurrentBufferSizeSamples() : 0;
         fifo.prepare (numOut, output->getCurrentSampleRate(), inputBlock, output->getCurrentBufferSizeSamples());
-        hostBlock = jmax (16, output->getCurrentBufferSizeSamples());
+        hostBlock = inputOpen ? requested : jmax (16, output->getCurrentBufferSizeSamples());
         hostOutput.setSize (fifo.getNumChannels(), hostBlock);
         opened = true;
         return {};
@@ -317,7 +319,7 @@ public:
     }
 
     // The host runs on the input's clock (if there is an input).
-    int getCurrentBufferSizeSamples() override   { return output->getCurrentBufferSizeSamples(); }
+    int getCurrentBufferSizeSamples() override   { return inputOpen ? hostBlock : output->getCurrentBufferSizeSamples(); }
     double getCurrentSampleRate() override       { return output->getCurrentSampleRate(); }
     int getCurrentBitDepth() override            { return output->getCurrentBitDepth(); }
     BigInteger getActiveOutputChannels() const override { return output->getActiveOutputChannels(); }
@@ -396,6 +398,19 @@ private:
 
         DirectDevice& owner;
     };
+
+    // The smallest buffer the output supports that is at least the requested size.
+    int outputBufferFor (int requested)
+    {
+        auto sizes = output->getAvailableBufferSizes();
+        if (sizes.isEmpty())
+            return requested;
+        sizes.sort();
+        for (auto s : sizes)
+            if (s >= requested)
+                return s;
+        return sizes.getLast();
+    }
 
     void forwardError (const String& e)
     {
