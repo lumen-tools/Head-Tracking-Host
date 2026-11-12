@@ -17,9 +17,6 @@
 
 namespace loopback
 {
-// Names of the active playback devices.
-std::vector<std::string> playbackDeviceNames();
-
 struct Format
 {
     int channels = 0;

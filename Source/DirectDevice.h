@@ -434,9 +434,11 @@ public:
     {
         // Windows channel order; 7.1 = front, centre, LFE, rear (back), side.
         static const char* const names71[] = { "Left", "Right", "Centre", "LFE", "Rear Left", "Rear Right", "Side Left", "Side Right" };
+        // Format unknown (device not answering yet): offer 7.1; opening reports the real problem.
+        const int channels = format.channels > 0 ? format.channels : 8;
         StringArray names;
-        for (int ch = 0; ch < format.channels; ++ch)
-            names.add (format.channels == 8 ? String (names71[ch]) : "Input " + String (ch + 1));
+        for (int ch = 0; ch < channels; ++ch)
+            names.add (channels == 8 ? String (names71[ch]) : "Input " + String (ch + 1));
         return names;
     }
 
@@ -556,9 +558,10 @@ public:
     {
         inner->scanForDevices();
        #if JUCE_WINDOWS
+        // Every playback device of the output list can be recorded as an input, too.
         loopbackInputs.clear();
-        for (auto& n : loopback::playbackDeviceNames())
-            loopbackInputs.add (String::fromUTF8 (n.c_str()) + LoopbackDevice::suffix);
+        for (auto& n : inner->getDeviceNames (false))
+            loopbackInputs.add (n + LoopbackDevice::suffix);
        #endif
     }
 

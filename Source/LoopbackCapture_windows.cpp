@@ -143,14 +143,6 @@ float sampleAt (const BYTE* p, const SampleFormat& f)
 }
 } // namespace
 
-std::vector<std::string> playbackDeviceNames()
-{
-    ComScope com (COINIT_APARTMENTTHREADED);
-    std::vector<std::string> names;
-    forEachPlaybackDevice ([&] (const std::string& n, ComPtr<IMMDevice>&) { names.push_back (n); return false; });
-    return names;
-}
-
 bool queryFormat (const std::string& deviceName, Format& format)
 {
     ComScope com (COINIT_APARTMENTTHREADED);
