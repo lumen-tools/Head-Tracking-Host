@@ -9,6 +9,8 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_osc/juce_osc.h>
 #include "BinaryData.h"
+#include "DirectDevice.h"
+#include "SystemVolume.h"
 
 #include <array>
 #include <atomic>
@@ -458,25 +460,32 @@ private:
     std::shared_ptr<FlexAsioStart> starter;
 };
 
+#endif
+
 class HostDeviceManager : public AudioDeviceManager
 {
 public:
+   #if JUCE_WINDOWS
     std::shared_ptr<FlexAsioStart> flexAsioStart = std::make_shared<FlexAsioStart>();
+   #endif
 
     void createAudioDeviceTypes (OwnedArray<AudioIODeviceType>& types) override
     {
         AudioDeviceManager::createAudioDeviceTypes (types);
+       #if JUCE_WINDOWS
         for (int i = 0; i < types.size(); ++i)
             if (types[i]->getTypeName() == "ASIO")
             {
                 std::unique_ptr<AudioIODeviceType> asio (types.removeAndReturn (i));
                 types.insert (i, new StartingAsioType (std::move (asio), flexAsioStart));
             }
+       #endif
+        // Virtual device in, headphones out, with clock drift correction - no ASIO driver or
+        // aggregate device needed. Listed first, so it is the default for a new setup.
+        if (auto system = hth::DirectAudioType::createSystemType())
+            types.insert (0, new hth::DirectAudioType (std::move (system)));
     }
 };
-#else
-using HostDeviceManager = AudioDeviceManager;
-#endif
 
 float parseDegrees (const String& text)
 {
@@ -883,6 +892,15 @@ public:
 
     float takeInputPeak (int ch) { return isPositiveAndBelow (ch, 12) ? inputPeaks[(size_t) ch].exchange (0.0f) : 0.0f; }
 
+    // System volume follow: input gain undoes a volume the virtual device already applied to its
+    // audio (the headphones' own volume does that job instead); output gain is the fallback when
+    // the headphones have no volume control. Changes are ramped over one block.
+    void setVolumeGains (float input, float output)
+    {
+        inputGain = input;
+        outputGain = output;
+    }
+
     void setInputSource (int pluginChannel, int deviceChannel)
     {
         if (isPositiveAndBelow (pluginChannel, maxChannels))
@@ -969,6 +987,17 @@ public:
                 FloatVectorOperations::addWithMultiply (block.getWritePointer (ch), inputs[fold], 0.7071f, numSamples);
         }
 
+        // Undo the virtual device's own volume (see setVolumeGains).
+        {
+            const float target = inputGain.load();
+            if (target != currentInputGain || target != 1.0f)
+            {
+                for (int ch = 0; ch < jmin (channels, pluginIns); ++ch)
+                    block.applyGainRamp (ch, 0, numSamples, currentInputGain, target);
+                currentInputGain = target;
+            }
+        }
+
         // Input meters: peak per routed plugin input channel.
         for (int ch = 0; ch < jmin (12, pluginIns, channels); ++ch)
         {
@@ -982,6 +1011,7 @@ public:
             // Dry signal (speaker simulation off or no plugin): the routed input, downmixed to stereo.
             writeDownmix (block, jmin (channels, pluginIns), outputs, numOutputs, numSamples);
             headphoneEq.process (outputs, numOutputs, numSamples); // headphone correction works on its own too
+            applyOutputGain (outputs, numOutputs, numSamples);
             applySoftStart (outputs, numOutputs, numSamples);
             return;
         }
@@ -1008,10 +1038,28 @@ public:
         }
 
         headphoneEq.process (outputs, numOutputs, numSamples);
+        applyOutputGain (outputs, numOutputs, numSamples);
         applySoftStart (outputs, numOutputs, numSamples);
     }
 
 private:
+    void applyOutputGain (float* const* outputs, int numOutputs, int numSamples)
+    {
+        const float target = outputGain.load();
+        if (target == currentOutputGain && target == 1.0f)
+            return;
+        const float step = (target - currentOutputGain) / (float) jmax (1, numSamples);
+        for (int ch = 0; ch < numOutputs; ++ch)
+        {
+            if (outputs[ch] == nullptr)
+                continue;
+            float g = currentOutputGain;
+            for (int i = 0; i < numSamples; ++i, g += step)
+                outputs[ch][i] *= g;
+        }
+        currentOutputGain = target;
+    }
+
     void writeDownmix (const AudioBuffer<float>& in, int numIn, float* const* outputs, int numOutputs, int numSamples)
     {
         clearOutputs (outputs, numOutputs, numSamples);
@@ -1080,6 +1128,8 @@ private:
     MidiBuffer midi;
     double sampleRate = 48000.0;
     int silenceSamples = 0, fadeSamples = 1, fadePosition = 0;
+    std::atomic<float> inputGain { 1.0f }, outputGain { 1.0f };
+    float currentInputGain = 1.0f, currentOutputGain = 1.0f;   // audio thread only
 };
 
 //==============================================================================
@@ -1221,6 +1271,24 @@ public:
         autoEqSearchButton.setTooltip ("Headphone correction: slots, curve, database search and file import.");
         applyAutoEq();
         updateDownmix(); // dry path is ready even before a plugin is loaded
+
+        // Volume keys: they change the virtual device the system plays into; this lets them turn
+        // the headphones up and down instead (global, the same for every plugin).
+        sidebar.addAndMakeVisible (volumeFollowButton);
+        volumeFollowButton.getProperties().set ("switch", true);
+        volumeFollowButton.setToggleState (settings->getBoolValue ("volumeKeysFollow", true), dontSendNotification);
+        volumeFollowButton.setTooltip ("Global setting - applies to all plugins. The system volume (keys, slider) changes "
+                                       "the virtual device you play into. With this on, Head Tracking Host passes it on to "
+                                       "the output device (your headphones), so you don't have to change the headphones' "
+                                       "volume in the sound settings. When switched on, the virtual device first takes "
+                                       "over the headphones' current volume, so nothing gets louder.");
+        volumeFollowButton.onClick = [this]
+        {
+            settings->setValue ("volumeKeysFollow", volumeFollowButton.getToggleState());
+            updateVolumeDevices();
+        };
+        volumeTimer.callback = [this] { followSystemVolume(); };
+        volumeTimer.startTimerHz (10);
 
         sidebar.addAndMakeVisible (trackingButton);
         trackingButton.getProperties().set ("switch", true);
@@ -1367,6 +1435,7 @@ public:
 
     ~MainComponent() override
     {
+        volumeTimer.stopTimer();
         pluginScan.reset(); // stops the scan (and ends a running scan process)
         saveState();
         settings->setValue ("startupPending", false);
@@ -1505,6 +1574,7 @@ public:
 
         beginGroup ("OUTPUT");
         speakerSimButton.setBounds (switchArea (row ("Speaker simulation", 200)));
+        volumeFollowButton.setBounds (switchArea (row ("Volume keys control output", 200)));
         autoEqButton.setBounds (switchArea (row ("Headphone correction", 200)));
         {
             auto r = row ("");
@@ -2188,6 +2258,96 @@ private:
 
         feedbackRisk = sameLoopback (input, output);
         engine.setMuted (feedbackRisk);
+        updateVolumeDevices();
+    }
+
+    //==============================================================================
+    // Volume keys -> headphones. The keys change the volume of the virtual device the system plays
+    // into; it is copied to the output device. If the virtual device already turned its own audio
+    // down by that volume (BlackHole does, Windows does for devices without their own control),
+    // that is undone here, so the volume is applied once - by the headphones.
+    void updateVolumeDevices()
+    {
+        String source, target;
+        if (volumeFollowButton.getToggleState() && audioInitialised)
+        {
+            AudioDeviceManager::AudioDeviceSetup setup;
+            deviceManager.getAudioDeviceSetup (setup);
+            source = setup.inputDeviceName;
+            target = setup.outputDeviceName;
+           #if JUCE_WINDOWS
+            if (deviceManager.getCurrentAudioDeviceType() == "ASIO")
+            {
+                if (target.containsIgnoreCase ("FlexASIO"))
+                    std::tie (source, target) = readFlexAsioDevices();
+                else
+                    source = target = {};
+            }
+            // The keys act on the playback side of the cable that is recorded here.
+            if (wasapiNames == nullptr)
+                wasapiNames.reset (AudioIODeviceType::createAudioIODeviceType_WASAPI (WASAPIDeviceMode::shared));
+            if (wasapiNames != nullptr && source.isNotEmpty())
+            {
+                wasapiNames->scanForDevices();
+                source = playbackSideOf (source, wasapiNames->getDeviceNames (false));
+            }
+           #endif
+            if (source == target)
+                source = target = {};
+        }
+
+        if (source != volumeSource || target != volumeTarget)
+        {
+            volumeSource = source;
+            volumeTarget = target;
+            volumeControl.setDevices (source.toStdString(), target.toStdString());
+            volumeNeedsSync = true;
+        }
+        if (source.isEmpty() || target.isEmpty())
+            engine.setVolumeGains (1.0f, 1.0f);
+    }
+
+    void followSystemVolume()
+    {
+        if (volumeSource.isEmpty() || volumeTarget.isEmpty())
+            return;
+
+        sysvol::Volume src;
+        if (! volumeControl.readSource (src))
+        {
+            engine.setVolumeGains (1.0f, 1.0f);
+            volumeNeedsSync = true;
+            return;
+        }
+
+        if (volumeNeedsSync)
+        {
+            // Start from the headphones' current volume, so switching on never makes anything louder.
+            volumeNeedsSync = false;
+            sysvol::Volume dst;
+            if (volumeControl.readTarget (dst) && volumeControl.writeSource (dst.scalar, dst.muted))
+                volumeControl.readSource (src);
+            lastVolumeScalar = -1.0f;
+        }
+
+        if (std::abs (src.scalar - lastVolumeScalar) > 0.0005f || src.muted != lastVolumeMuted)
+        {
+            volumeTargetWritable = volumeControl.writeTarget (src.scalar, src.muted);
+            lastVolumeScalar = src.scalar;
+            lastVolumeMuted = src.muted;
+        }
+
+        float inputGain = 1.0f, outputGain = 1.0f;
+        if (volumeTargetWritable)
+        {
+            if (src.appliedToSignal && ! src.muted)
+                inputGain = Decibels::decibelsToGain (-jmax (src.decibels, -60.0f));
+        }
+        else if (! src.appliedToSignal)
+        {
+            outputGain = src.muted ? 0.0f : Decibels::decibelsToGain (src.decibels, -100.0f);
+        }
+        engine.setVolumeGains (inputGain, outputGain);
     }
 
     //==============================================================================
@@ -3191,8 +3351,23 @@ private:
     AudioProcessor::BusesLayout pluginDefaultLayout;
     bool foldRearIntoSurround = false; // a 7.1 source feeds a plugin that only takes 5.1
     String activeLayoutBase;
-    ToggleButton foldButton, reconnectButton, startSoundButton;
+    ToggleButton foldButton, reconnectButton, startSoundButton, volumeFollowButton;
     bool deviceStoppedUnexpectedly = false;
+
+    struct CallbackTimer : public Timer
+    {
+        std::function<void()> callback;
+        void timerCallback() override { if (callback) callback(); }
+    };
+    CallbackTimer volumeTimer;
+    sysvol::Control volumeControl;
+    String volumeSource, volumeTarget;
+    bool volumeNeedsSync = true, volumeTargetWritable = true;
+    float lastVolumeScalar = -1.0f;
+    bool lastVolumeMuted = false;
+   #if JUCE_WINDOWS
+    std::unique_ptr<AudioIODeviceType> wasapiNames; // render device names, for the virtual cable's playback side
+   #endif
 
     KnownPluginList knownPlugins;
     String scanningPluginName;

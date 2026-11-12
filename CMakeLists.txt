@@ -36,11 +36,16 @@ juce_add_gui_app(HeadTrackingHost
 
 target_sources(HeadTrackingHost PRIVATE Source/Main.cpp)
 if(UNIX AND NOT APPLE)
+    target_sources(HeadTrackingHost PRIVATE Source/SystemVolume_other.cpp)
     target_link_libraries(HeadTrackingHost PRIVATE curl) # Linux test builds: downloads via libcurl
 endif()
+if(WIN32)
+    target_sources(HeadTrackingHost PRIVATE Source/SystemVolume_windows.cpp)
+    target_link_libraries(HeadTrackingHost PRIVATE ole32)
+endif()
 if(APPLE)
-    target_sources(HeadTrackingHost PRIVATE Source/MicrophonePermission.mm)
-    target_link_libraries(HeadTrackingHost PRIVATE "-framework AVFoundation")
+    target_sources(HeadTrackingHost PRIVATE Source/MicrophonePermission.mm Source/SystemVolume_mac.cpp)
+    target_link_libraries(HeadTrackingHost PRIVATE "-framework AVFoundation" "-framework CoreAudio")
 endif()
 
 target_compile_definitions(HeadTrackingHost PRIVATE
