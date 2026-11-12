@@ -48,6 +48,7 @@ public:
         // Target fill: one block of each side plus 10 ms of reserve for irregular delivery.
         target = jmax (64, writeBlock) + jmax (64, readBlock) + (int) (0.010 * sampleRate);
         const int capacity = jmax (target * 4, (int) (sampleRate * 0.5));
+        maxTarget = capacity / 3;
         buffer.setSize (channels, capacity);
         buffer.clear();
         fifo.setTotalSize (capacity);
@@ -71,7 +72,7 @@ public:
         filteredFill = 0.0;
     }
 
-    int getTargetFill() const noexcept     { return target; }
+    int getTargetFill() const noexcept     { return target.load(); }
     int getNumChannels() const noexcept    { return channels; }
     int takeDropouts() noexcept            { return dropouts.exchange (0); }
 
@@ -148,7 +149,11 @@ private:
         const int need = (int) std::ceil (n * ratio) + 4;
         if (ready < need || need > scratch.getNumSamples())
         {
-            primed = false;               // ran empty (the input stopped): silence, then refill
+            // Ran empty (the input came late or stopped): silence, then refill - with 5 ms more
+            // reserve, so a device that delivers irregularly settles at a level that suits it.
+            if (primed)
+                target = jmin (maxTarget, target + (int) (0.005 * sampleRate));
+            primed = false;
             dropouts.fetch_add (1);
             silence();
             return;
@@ -188,7 +193,8 @@ private:
     AbstractFifo fifo { 1 };
     AudioBuffer<float> buffer, scratch, dummy;
     std::vector<WindowedSincInterpolator> interpolators;
-    int channels = 1, target = 1024, maxChunk = 4096;
+    int channels = 1, maxTarget = 8192, maxChunk = 4096;
+    std::atomic<int> target { 1024 };
     double sampleRate = 48000.0, ratio = 1.0, integral = 0.0, filteredFill = 0.0;
     bool primed = false;
     std::atomic<int> dropouts { 0 };
@@ -261,11 +267,17 @@ public:
             return lastError;
         }
 
+        // The host always gets blocks of exactly the chosen size - many plugins expect the block size
+        // they were prepared with. The input arrives in its own packets (loopback: 10 ms) and is
+        // collected until a whole block is there.
         const int numOut = output->getActiveOutputChannels().countNumberOfSetBits();
         const int inputBlock = inputOpen ? input->getCurrentBufferSizeSamples() : 0;
-        fifo.prepare (numOut, output->getCurrentSampleRate(), inputBlock, output->getCurrentBufferSizeSamples());
         hostBlock = inputOpen ? requested : jmax (16, output->getCurrentBufferSizeSamples());
+        fifo.prepare (numOut, output->getCurrentSampleRate(), jmax (inputBlock, hostBlock), output->getCurrentBufferSizeSamples());
         hostOutput.setSize (fifo.getNumChannels(), hostBlock);
+        hostInput.setSize (jmax (1, inputOpen ? input->getActiveInputChannels().countNumberOfSetBits() : 0), hostBlock);
+        hostInput.clear();
+        hostInputFill = 0;
         opened = true;
         return {};
     }
@@ -287,6 +299,7 @@ public:
             return;
         stop();
         fifo.reset();
+        hostInputFill = 0;
         callback->audioDeviceAboutToStart (this);
         host = callback;
         playing = true;
@@ -325,7 +338,7 @@ public:
     BigInteger getActiveOutputChannels() const override { return output->getActiveOutputChannels(); }
     BigInteger getActiveInputChannels() const override  { return inputOpen ? input->getActiveInputChannels() : BigInteger(); }
     int getOutputLatencyInSamples() override     { return output->getOutputLatencyInSamples() + (inputOpen ? fifo.getTargetFill() : 0); }
-    int getInputLatencyInSamples() override      { return inputOpen ? input->getInputLatencyInSamples() : 0; }
+    int getInputLatencyInSamples() override      { return inputOpen ? input->getInputLatencyInSamples() + hostBlock : 0; }
 
     int getXRunCount() const noexcept override
     {
@@ -344,26 +357,36 @@ private:
         void audioDeviceIOCallbackWithContext (const float* const* inputs, int numInputs, float* const*, int,
                                                int numSamples, const AudioIODeviceCallbackContext& context) override
         {
-            auto* callback = owner.host.load();
+            auto& acc = owner.hostInput;
             auto& out = owner.hostOutput;
-            const int numIn = jmin (numInputs, (int) maxChannels);
-            std::array<const float*, maxChannels> in {};
+            const int block = acc.getNumSamples();
             for (int done = 0; done < numSamples;)
             {
-                const int n = jmin (out.getNumSamples(), numSamples - done);
-                for (int ch = 0; ch < numIn; ++ch)
-                    in[(size_t) ch] = inputs[ch] != nullptr ? inputs[ch] + done : nullptr;
-                for (int ch = 0; ch < out.getNumChannels(); ++ch)
-                    FloatVectorOperations::clear (out.getWritePointer (ch), n);
-                if (callback != nullptr)
-                    callback->audioDeviceIOCallbackWithContext (in.data(), numIn, out.getArrayOfWritePointers(),
-                                                                out.getNumChannels(), n, context);
-                owner.fifo.write (out.getArrayOfReadPointers(), out.getNumChannels(), n);
+                const int n = jmin (block - owner.hostInputFill, numSamples - done);
+                for (int ch = 0; ch < acc.getNumChannels(); ++ch)
+                {
+                    auto* dest = acc.getWritePointer (ch) + owner.hostInputFill;
+                    if (ch < numInputs && inputs[ch] != nullptr)
+                        FloatVectorOperations::copy (dest, inputs[ch] + done, n);
+                    else
+                        FloatVectorOperations::clear (dest, n);
+                }
+                owner.hostInputFill += n;
                 done += n;
+                if (owner.hostInputFill < block)
+                    break;
+
+                // A whole block: run the host on it.
+                owner.hostInputFill = 0;
+                for (int ch = 0; ch < out.getNumChannels(); ++ch)
+                    FloatVectorOperations::clear (out.getWritePointer (ch), block);
+                if (auto* callback = owner.host.load())
+                    callback->audioDeviceIOCallbackWithContext (acc.getArrayOfReadPointers(), jmin (numInputs, acc.getNumChannels()),
+                                                                out.getArrayOfWritePointers(), out.getNumChannels(), block, context);
+                owner.fifo.write (out.getArrayOfReadPointers(), out.getNumChannels(), block);
             }
         }
 
-        static constexpr int maxChannels = 64;
         DirectDevice& owner;
     };
 
@@ -428,8 +451,8 @@ private:
     InputSide inputSide { *this };
     OutputSide outputSide { *this };
     DriftFifo fifo;
-    AudioBuffer<float> hostOutput;   // one host block
-    int hostBlock = 480;
+    AudioBuffer<float> hostInput, hostOutput;   // one host block each
+    int hostBlock = 480, hostInputFill = 0;
     std::atomic<AudioIODeviceCallback*> host { nullptr };
     std::atomic<int> dropoutCount { 0 };
     String lastError;
