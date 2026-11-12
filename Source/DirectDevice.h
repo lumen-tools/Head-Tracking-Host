@@ -230,8 +230,10 @@ public:
         return rates;
     }
 
-    Array<int> getAvailableBufferSizes() override { return (input != nullptr ? *input : *output).getAvailableBufferSizes(); }
-    int getDefaultBufferSize() override           { return (input != nullptr ? *input : *output).getDefaultBufferSize(); }
+    // The buffer size is the host's block size and the headphones' buffer; the input delivers in
+    // its own rhythm and is split into blocks of this size.
+    Array<int> getAvailableBufferSizes() override { return output->getAvailableBufferSizes(); }
+    int getDefaultBufferSize() override           { return output->getDefaultBufferSize(); }
 
     String open (const BigInteger& ins, const BigInteger& outs, double rate, int bufferSize) override
     {
@@ -260,7 +262,8 @@ public:
         const int numOut = output->getActiveOutputChannels().countNumberOfSetBits();
         const int inputBlock = inputOpen ? input->getCurrentBufferSizeSamples() : 0;
         fifo.prepare (numOut, output->getCurrentSampleRate(), inputBlock, output->getCurrentBufferSizeSamples());
-        hostOutput.setSize (fifo.getNumChannels(), jmax (4096, inputBlock * 2));
+        hostBlock = jmax (16, output->getCurrentBufferSizeSamples());
+        hostOutput.setSize (fifo.getNumChannels(), hostBlock);
         opened = true;
         return {};
     }
@@ -314,7 +317,7 @@ public:
     }
 
     // The host runs on the input's clock (if there is an input).
-    int getCurrentBufferSizeSamples() override   { return inputOpen ? input->getCurrentBufferSizeSamples() : output->getCurrentBufferSizeSamples(); }
+    int getCurrentBufferSizeSamples() override   { return output->getCurrentBufferSizeSamples(); }
     double getCurrentSampleRate() override       { return output->getCurrentSampleRate(); }
     int getCurrentBitDepth() override            { return output->getCurrentBitDepth(); }
     BigInteger getActiveOutputChannels() const override { return output->getActiveOutputChannels(); }
@@ -404,7 +407,8 @@ private:
     InputSide inputSide { *this };
     OutputSide outputSide { *this };
     DriftFifo fifo;
-    AudioBuffer<float> hostOutput;
+    AudioBuffer<float> hostOutput;   // one host block
+    int hostBlock = 480;
     std::atomic<AudioIODeviceCallback*> host { nullptr };
     std::atomic<int> dropoutCount { 0 };
     String lastError;
