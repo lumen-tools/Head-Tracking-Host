@@ -2269,10 +2269,10 @@ private:
     void updateVolumeDevices()
     {
         String source, target;
+        AudioDeviceManager::AudioDeviceSetup setup;
+        deviceManager.getAudioDeviceSetup (setup);
         if (volumeFollowButton.getToggleState() && audioInitialised)
         {
-            AudioDeviceManager::AudioDeviceSetup setup;
-            deviceManager.getAudioDeviceSetup (setup);
             source = setup.inputDeviceName;
             target = setup.outputDeviceName;
            #if JUCE_WINDOWS
@@ -2295,6 +2295,8 @@ private:
             if (source == target)
                 source = target = {};
         }
+        // Recording a playback device (loopback) catches its audio before its volume is applied.
+        volumeSourceIsLoopback = setup.inputDeviceName.endsWith ("[Loopback]");
 
         if (source != volumeSource || target != volumeTarget)
         {
@@ -2319,6 +2321,8 @@ private:
             volumeNeedsSync = true;
             return;
         }
+        if (volumeSourceIsLoopback)
+            src.appliedToSignal = false;
 
         if (volumeNeedsSync)
         {
@@ -3362,7 +3366,7 @@ private:
     CallbackTimer volumeTimer;
     sysvol::Control volumeControl;
     String volumeSource, volumeTarget;
-    bool volumeNeedsSync = true, volumeTargetWritable = true;
+    bool volumeNeedsSync = true, volumeTargetWritable = true, volumeSourceIsLoopback = false;
     float lastVolumeScalar = -1.0f;
     bool lastVolumeMuted = false;
    #if JUCE_WINDOWS

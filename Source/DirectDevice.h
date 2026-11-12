@@ -20,10 +20,14 @@
 #pragma once
 
 #include <juce_audio_devices/juce_audio_devices.h>
+#if JUCE_WINDOWS
+ #include "LoopbackCapture.h"
+#endif
 
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <vector>
 
@@ -407,9 +411,123 @@ private:
     bool opened = false, inputOpen = false, playing = false;
 };
 
+#if JUCE_WINDOWS
+//==============================================================================
+// Windows: a playback device used as input - records what is played into it (WASAPI loopback).
+// This is how "Hi-Fi Cable Input", the device games play into, is recorded. Listed among the
+// inputs as "<name> [Loopback]".
+class LoopbackDevice : public AudioIODevice
+{
+public:
+    static constexpr const char* suffix = " [Loopback]";
+
+    LoopbackDevice (const String& playbackName, const String& typeName)
+        : AudioIODevice (playbackName + suffix, typeName), playback (playbackName)
+    {
+        loopback::queryFormat (playback.toStdString(), format);
+    }
+
+    ~LoopbackDevice() override { close(); }
+
+    StringArray getOutputChannelNames() override { return {}; }
+    StringArray getInputChannelNames() override
+    {
+        // Windows channel order; 7.1 = front, centre, LFE, rear (back), side.
+        static const char* const names71[] = { "Left", "Right", "Centre", "LFE", "Rear Left", "Rear Right", "Side Left", "Side Right" };
+        StringArray names;
+        for (int ch = 0; ch < format.channels; ++ch)
+            names.add (format.channels == 8 ? String (names71[ch]) : "Input " + String (ch + 1));
+        return names;
+    }
+
+    Array<double> getAvailableSampleRates() override { return format.sampleRate > 0 ? Array<double> { format.sampleRate } : Array<double>(); }
+    Array<int> getAvailableBufferSizes() override    { return { getDefaultBufferSize() }; }
+    int getDefaultBufferSize() override              { return format.periodFrames > 0 ? format.periodFrames : 480; }
+
+    String open (const BigInteger& ins, const BigInteger&, double rate, int) override
+    {
+        close();
+        if (! loopback::queryFormat (playback.toStdString(), format))
+            return lastError = "Playback device not found: " + playback;
+        if (rate > 0 && std::abs (rate - format.sampleRate) > 0.5)
+            return lastError = playback + " runs at " + String (format.sampleRate) + " Hz. Set it to "
+                             + String (rate) + " Hz in the Windows sound settings (Properties > Advanced).";
+        active = ins;
+        active.setRange (format.channels, jmax (0, active.getHighestBit() + 1 - format.channels), false);
+        activeList.clear();
+        for (int ch = 0; ch < format.channels; ++ch)
+            if (active[ch])
+                activeList.push_back (ch);
+        lastError = {};
+        opened = true;
+        return {};
+    }
+
+    void close() override
+    {
+        stop();
+        opened = false;
+    }
+
+    bool isOpen() override { return opened; }
+
+    void start (AudioIODeviceCallback* callback) override
+    {
+        if (! opened || callback == nullptr)
+            return;
+        stop();
+        callback->audioDeviceAboutToStart (this);
+        host = callback;
+        lastError = capture.start (playback.toStdString(),
+                                   [this] (const float* const* data, int numChannels, int numFrames)
+                                   {
+                                       std::array<const float*, 64> in {};
+                                       int n = 0;
+                                       for (auto ch : activeList)
+                                           if (ch < numChannels && n < (int) in.size())
+                                               in[(size_t) n++] = data[ch];
+                                       if (auto* cb = host.load())
+                                           cb->audioDeviceIOCallbackWithContext (in.data(), n, nullptr, 0, numFrames, {});
+                                   });
+        if (lastError.isNotEmpty())
+        {
+            host = nullptr;
+            callback->audioDeviceStopped();
+        }
+    }
+
+    void stop() override
+    {
+        capture.stop();
+        if (auto* callback = host.exchange (nullptr))
+            callback->audioDeviceStopped();
+    }
+
+    bool isPlaying() override                            { return capture.isRunning(); }
+    String getLastError() override                       { return lastError; }
+    int getCurrentBufferSizeSamples() override           { return getDefaultBufferSize(); }
+    double getCurrentSampleRate() override               { return format.sampleRate; }
+    int getCurrentBitDepth() override                    { return 32; }
+    BigInteger getActiveOutputChannels() const override  { return {}; }
+    BigInteger getActiveInputChannels() const override   { return active; }
+    int getOutputLatencyInSamples() override             { return 0; }
+    int getInputLatencyInSamples() override              { return getDefaultBufferSize(); }
+
+private:
+    String playback, lastError;
+    loopback::Format format;
+    loopback::Capture capture;
+    BigInteger active;
+    std::vector<int> activeList;
+    std::atomic<AudioIODeviceCallback*> host { nullptr };
+    bool opened = false;
+};
+#endif
+
 //==============================================================================
 // Lists the devices of the system's own audio API (WASAPI shared / Core Audio) and creates a
-// DirectDevice for the chosen output and input.
+// DirectDevice for the chosen output and input. On Windows, playback devices are listed among the
+// inputs too (as "<name> [Loopback]"), so the device games play into can be recorded directly.
 class DirectAudioType : public AudioIODeviceType, private AudioIODeviceType::Listener
 {
 public:
@@ -434,8 +552,26 @@ public:
 
     ~DirectAudioType() override { inner->removeListener (this); }
 
-    void scanForDevices() override                               { inner->scanForDevices(); }
-    StringArray getDeviceNames (bool forInput) const override    { return inner->getDeviceNames (forInput); }
+    void scanForDevices() override
+    {
+        inner->scanForDevices();
+       #if JUCE_WINDOWS
+        loopbackInputs.clear();
+        for (auto& n : loopback::playbackDeviceNames())
+            loopbackInputs.add (String::fromUTF8 (n.c_str()) + LoopbackDevice::suffix);
+       #endif
+    }
+
+    StringArray getDeviceNames (bool forInput) const override
+    {
+        auto names = inner->getDeviceNames (forInput);
+       #if JUCE_WINDOWS
+        if (forInput)
+            names.addArray (loopbackInputs);
+       #endif
+        return names;
+    }
+
     int getDefaultDeviceIndex (bool forInput) const override     { return inner->getDefaultDeviceIndex (forInput); }
     bool hasSeparateInputsAndOutputs() const override            { return true; }
 
@@ -454,14 +590,26 @@ public:
         if (out == nullptr)
             return nullptr;
         std::unique_ptr<AudioIODevice> in;
+       #if JUCE_WINDOWS
+        if (inputName.endsWith (LoopbackDevice::suffix))
+            in = std::make_unique<LoopbackDevice> (inputName.dropLastCharacters ((int) strlen (LoopbackDevice::suffix)), getTypeName());
+        else
+       #endif
         if (inputName.isNotEmpty())
             in.reset (inner->createDevice ({}, inputName));
         return new DirectDevice (getTypeName(), std::move (out), std::move (in));
     }
 
 private:
-    void audioDeviceListChanged() override { callDeviceChangeListeners(); }
+    void audioDeviceListChanged() override
+    {
+        scanForDevices();
+        callDeviceChangeListeners();
+    }
 
     std::unique_ptr<AudioIODeviceType> inner;
+   #if JUCE_WINDOWS
+    StringArray loopbackInputs;
+   #endif
 };
 } // namespace hth

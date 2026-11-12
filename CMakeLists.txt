@@ -40,7 +40,7 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(HeadTrackingHost PRIVATE curl) # Linux test builds: downloads via libcurl
 endif()
 if(WIN32)
-    target_sources(HeadTrackingHost PRIVATE Source/SystemVolume_windows.cpp)
+    target_sources(HeadTrackingHost PRIVATE Source/SystemVolume_windows.cpp Source/LoopbackCapture_windows.cpp)
     target_link_libraries(HeadTrackingHost PRIVATE ole32)
 endif()
 if(APPLE)
