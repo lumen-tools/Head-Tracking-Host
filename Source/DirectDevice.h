@@ -231,8 +231,8 @@ public:
     }
 
     // The usual audio buffer sizes. The chosen size is the host's block size (the input is split
-    // into blocks of it); the headphones get the nearest buffer they support, at least this size -
-    // the FIFO between them takes up the difference.
+    // into blocks of it); the devices themselves use buffers that suit them (see deviceBufferFor) -
+    // the FIFO between input and output takes up the difference.
     Array<int> getAvailableBufferSizes() override { return { 64, 128, 256, 512, 1024, 2048 }; }
     int getDefaultBufferSize() override           { return 256; }
 
@@ -240,10 +240,10 @@ public:
     {
         close();
         const int requested = bufferSize > 0 ? bufferSize : getDefaultBufferSize();
-        lastError = output->open ({}, outs, rate, outputBufferFor (requested));
+        lastError = output->open ({}, outs, rate, deviceBufferFor (*output, requested));
         if (lastError.isEmpty() && input != nullptr && ! ins.isZero())
         {
-            lastError = input->open (ins, {}, rate, outputBufferFor (requested));
+            lastError = input->open (ins, {}, rate, deviceBufferFor (*input, requested));
             if (lastError.isEmpty()
                 && std::abs (input->getCurrentSampleRate() - output->getCurrentSampleRate()) > 0.5)
             {
@@ -399,16 +399,22 @@ private:
         DirectDevice& owner;
     };
 
-    // The smallest buffer the output supports that is at least the requested size.
-    int outputBufferFor (int requested)
+    // Buffer for one of the two system devices. Windows (WASAPI shared): always the device's own
+    // period - smaller buffers there crackle - while the host still runs in the chosen block size;
+    // the FIFO takes up the difference. Mac: the smallest supported size of at least the request.
+    static int deviceBufferFor (AudioIODevice& device, int requested)
     {
-        auto sizes = output->getAvailableBufferSizes();
+       #if JUCE_WINDOWS
+        if (const int period = device.getDefaultBufferSize(); period > 0)
+            return period;
+       #endif
+        auto sizes = device.getAvailableBufferSizes();
         if (sizes.isEmpty())
             return requested;
         sizes.sort();
-        for (auto s : sizes)
-            if (s >= requested)
-                return s;
+        for (auto size : sizes)
+            if (size >= requested)
+                return size;
         return sizes.getLast();
     }
 
