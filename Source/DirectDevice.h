@@ -480,13 +480,12 @@ public:
     StringArray getOutputChannelNames() override { return {}; }
     StringArray getInputChannelNames() override
     {
-        // Windows channel order; 7.1 = front, centre, LFE, rear (back), side.
-        static const char* const names71[] = { "Left", "Right", "Centre", "LFE", "Rear Left", "Rear Right", "Side Left", "Side Right" };
-        // Format unknown (device not answering yet): offer 7.1; opening reports the real problem.
+        // Numbered like ASIO drivers (FlexASIO): IN 0, IN 1, ... - shown in pairs ("IN 0 + 1").
+        // Format unknown (device not answering yet): offer 8; opening reports the real problem.
         const int channels = format.channels > 0 ? format.channels : 8;
         StringArray names;
         for (int ch = 0; ch < channels; ++ch)
-            names.add (channels == 8 ? String (names71[ch]) : "Input " + String (ch + 1));
+            names.add ("IN " + String (ch));
         return names;
     }
 
@@ -581,7 +580,7 @@ private:
 class DirectAudioType : public AudioIODeviceType, private AudioIODeviceType::Listener
 {
 public:
-    static constexpr const char* name = "Direct with drift correction";
+    static constexpr const char* name = "HTH Direct";
 
     static std::unique_ptr<AudioIODeviceType> createSystemType()
     {

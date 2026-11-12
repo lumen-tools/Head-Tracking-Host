@@ -21,6 +21,10 @@ Games / music / video (7.1)
   yaw / pitch / roll parameters, so it works with any plugin that has such controls.
 - **Headphone correction** with profiles from the [AutoEq](https://github.com/jaakkopasanen/AutoEq)
   database – zero latency, also usable on its own as a system-wide headphone EQ.
+- **HTH Direct:** connects the virtual audio device to your headphones by itself – no FlexASIO, no
+  aggregate device. It keeps both devices in sync (clock drift correction), so there are no
+  clicks after a few minutes of playback.
+- **Volume keys work:** the system volume (keys, slider) controls your headphones.
 - **Up to 7.1.4 input**, free channel routing and a one-click fix for swapped Windows surrounds.
 - **Portable:** a single EXE (Windows) or app (Mac); settings are stored next to it.
 - **Safe by design:** soft fade-in, feedback protection for loopback devices, safe start after a
@@ -31,7 +35,7 @@ Games / music / video (7.1)
 | | Windows 10/11 | macOS (Apple Silicon and Intel) |
 |---|---|---|
 | Virtual audio device | [VB-Audio HiFi-Cable](https://vb-audio.com/Cable/) | [BlackHole 16ch](https://existential.audio/blackhole/) |
-| Audio driver | [FlexASIO](https://github.com/dechamps/FlexASIO) (+ FlexASIO GUI) | built in (Core Audio) |
+| Audio driver | none – built in (**HTH Direct**) | none – built in (**HTH Direct**) |
 | Plugin | a binaural / speaker simulation plugin as **VST3** | same |
 | Head tracker (optional) | anything that sends the **IEM SceneRotator** OSC format | same |
 
@@ -68,43 +72,80 @@ The app is not commercially code-signed, so the system warns once:
 1. Install VB-Audio HiFi-Cable and restart.
 2. Open the Windows sound control panel (*Sound settings → More sound settings*), tab *Playback*.
 3. Set **Hi-Fi Cable Input** as the default device, click **Configure** and choose **7.1 Surround**.
-4. In its *Properties → Advanced*, set the same sample rate as your headphones (e.g. 24 bit,
-   48000 Hz).
+4. In its *Properties → Advanced*, set the **same sample rate as your headphones** (e.g. 24 bit,
+   48000 Hz). Set your headphones to that rate too.
+
+**2. Head Tracking Host**
+1. Start the app and pick your plugin from the **Plugin** list (or **Browse...**).
+2. **Audio settings...**:
+   - Audio device type **HTH Direct**
+   - Output: **your headphones**
+   - Input: **Hi-Fi Cable Input (VB-Audio Hi-Fi Cable) [Loopback]**
+   - Active input channels: all four pairs, **IN 0 + 1** to **IN 6 + 7**
+   - Buffer size e.g. 256
+3. Set **Input** to **7.1 (8 channels)**.
+4. Click **Channels** → **Swap side/rear (Windows)** – Windows delivers the side and rear
+   surrounds in swapped order.
+
+HTH Direct records what is played into *Hi-Fi Cable Input* and plays the result on your
+headphones. The two devices run on their own clocks, which drift apart slowly; HTH Direct keeps
+them in sync (with an inaudible, tiny speed adjustment), so there are no clicks after a few
+minutes of playback.
+
+Then continue with [Head tracking](#head-tracking).
+
+<details>
+<summary><b>Alternative: FlexASIO</b> (the setup required up to version 2.0.x – still works)</summary>
+
+**1. Virtual 7.1 device** – as above.
 
 **2. FlexASIO**
-1. Install FlexASIO and FlexASIO GUI.
+1. Install [FlexASIO](https://github.com/dechamps/FlexASIO) and FlexASIO GUI.
 2. In FlexASIO GUI: backend **WASAPI**, input device **Hi-Fi Cable Output**, output device
    **your headphones**, channels **8** (input) and **2** (output). Leave buffer size, latency
    and the WASAPI exclusive options unset. *Save to default*.
 
 **3. Head Tracking Host**
-1. Start the app and pick your plugin from the **Plugin** list (or **Browse...**).
-2. **Audio settings...**: type **ASIO**, device **FlexASIO**, sample rate as your headphones,
+1. **Audio settings...**: type **ASIO**, device **FlexASIO**, sample rate as your headphones,
    buffer size e.g. 256. Enable the inputs **IN 0 – IN 7**.
-3. Set **Input** to **7.1 (8 channels)**.
-4. Click **Channels** → **Swap side/rear (Windows)** – Windows delivers the side and rear
-   surrounds in swapped order.
-5. Optional: turn on **FlexASIO start sound** (see [below](#flexasio-start-sound-windows)), so you
+2. Set **Input** to **7.1 (8 channels)** and click **Channels** → **Swap side/rear (Windows)**.
+3. Optional: turn on **FlexASIO start sound** (see [below](#flexasio-start-sound-windows)), so you
    don't have to start playback before opening the app.
 
-Then continue with [Head tracking](#head-tracking).
+FlexASIO does not correct clock drift between its input and output device, so you may hear a
+click every few minutes. HTH Direct avoids this.
+
+</details>
 
 ## Setup on macOS
 
 **1. Virtual device (BlackHole)**
 1. Install BlackHole 16ch.
-2. In *Audio MIDI Setup*, create an **Aggregate Device** with BlackHole 16ch (drift correction
-   **on**) and your headphones (drift correction off). Use the headphones as **clock source**.
-3. Configure the speakers of BlackHole 16ch as **7.1 Rear Surround**.
-4. Choose **BlackHole 16ch** as sound output in *System Settings → Sound* (control the volume
-   in Audio MIDI Setup).
+2. In *Audio MIDI Setup*, configure the speakers of BlackHole 16ch as **7.1 Rear Surround** and set
+   it to the **same sample rate as your headphones**.
+3. Choose **BlackHole 16ch** as sound output in *System Settings → Sound*.
 
 **2. Head Tracking Host**
 1. Start the app and allow **microphone access** (otherwise no audio arrives from BlackHole).
 2. Pick your plugin from the **Plugin** list (or **Browse...**).
-3. **Audio settings...**: input = the **aggregate device**, output = **your headphones**,
-   sample rate as your headphones, buffer size e.g. 128. Enable **8 inputs**.
+3. **Audio settings...**:
+   - Audio device type **HTH Direct**
+   - Output: **your headphones**
+   - Input: **BlackHole 16ch**
+   - **8 inputs** active
+   - Buffer size e.g. 128 or 256
 4. Set **Input** to **7.1 (8 channels)**. No channel swap is needed on the Mac.
+
+<details>
+<summary><b>Alternative: aggregate device</b> (the setup required up to version 2.0.x – still works)</summary>
+
+1. In *Audio MIDI Setup*, create an **Aggregate Device** with BlackHole 16ch (drift correction
+   **on**) and your headphones (drift correction off). Use the headphones as **clock source**.
+2. **Audio settings...**: type **CoreAudio**, input = the **aggregate device**, output = **your
+   headphones**, sample rate as your headphones, buffer size e.g. 128. Enable **8 inputs**.
+3. Set **Input** to **7.1 (8 channels)**.
+
+</details>
 
 ## Head tracking
 
@@ -145,6 +186,12 @@ channels instead of dropping them.
   from [autoeq.app](https://autoeq.app). Don't combine it with a correction inside the plugin
   (e.g. Virtuoso's HPC EQ), or your headphones are corrected twice.
 
+**Volume keys control output** (on by default, the same for every plugin). The system volume –
+keys, slider, volume pop-up – changes the virtual device you play into. With this switch on, the
+app passes it on to your headphones, so you no longer have to change the headphones' volume in the
+sound settings. When it is switched on, the virtual device first takes over the headphones' current
+volume, so nothing suddenly gets louder.
+
 **Window.** All windows can be resized; **Plugin zoom** scales plugins that support it. The
 **input levels** show the audio going into the plugin, the **head indicator** shows your head
 movement.
@@ -156,8 +203,8 @@ good, yellow or red names the problem and what to do.
 yaw / pitch / roll parameters to 0° – also at every start and plugin load – and leaves the
 plugin's controls to you.
 
-<a id="flexasio-start-sound-windows"></a>**FlexASIO start sound (Windows, off by default).**
-FlexASIO only starts once its input receives audio, so normally you have to start playback first.
+<a id="flexasio-start-sound-windows"></a>**FlexASIO start sound (Windows, off by default; only for
+the FlexASIO setup).** FlexASIO only starts once its input receives audio, so normally you have to start playback first.
 With this switch on (group *Global (all plugins)*), the app plays a short, very quiet burst of soft
 noise (about half a second) into the playback side of FlexASIO's input whenever FlexASIO is
 opened – at program start or when you choose it in *Audio settings...*. FlexASIO starts right
@@ -182,7 +229,8 @@ each attempt).
 | **Port 9000 is in use** | Another program listens on that port – close it. |
 | **No head tracking data** | Start your head tracker app, or turn head tracking off. |
 | **Receiving … but no yaw/pitch/roll** | Your tracker sends another format – switch it to the IEM SceneRotator format. |
-| **Output muted: input and output are the same loopback device** | Choose your headphones as output (in FlexASIO GUI on Windows). |
+| **Output muted: input and output are the same loopback device** | Choose your headphones as output (with FlexASIO: in FlexASIO GUI). |
+| **Input (… Hz) and output (… Hz) run at different sample rates** | Set the virtual device and your headphones to the same sample rate in the system sound settings. |
 | **Audio device stopped** | Click *Audio settings...* or turn on *Auto-reconnect audio device*. |
 | No sound at all | Check the enabled channels in *Audio settings...*; on the Mac check microphone access. |
 
