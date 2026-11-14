@@ -92,16 +92,10 @@ code { font: 13px var(--font-mono); background: color-mix(in srgb, var(--accent)
 
   <section class="panel" aria-labelledby="opt-h">
     <div class="label" id="opt-h">Plugin inputs</div>
-    <div class="options">
-      <label class="opt"><input type="radio" name="layout" id="layout8" value="8" checked>
-        <div><b>8 inputs – 7.1 as in HTH (recommended)</b>
-          <span>In HTH, set <b>Channels</b> to “Swap side/rear”, as with other plugins. The channel count is stored in the file, so X-MCFX does not ask for it.</span>
-          <div class="order">L R C LFE Back-L Back-R Side-L Side-R</div></div></label>
-      <label class="opt"><input type="radio" name="layout" id="layout7" value="7">
-        <div><b>7 inputs – as in the Reddit guide</b>
-          <span>For other hosts. Reroute in HTH.</span>
-          <div class="order">L R C Side-L Side-R Back-L Back-R</div></div></label>
-    </div>
+    <div class="opt" style="cursor:default">
+      <div><b>8 inputs – 7.1 as in HTH</b>
+        <span>In HTH, set <b>Channels</b> to “Swap side/rear”, as with other plugins. The channel count is stored in the file, so X-MCFX does not ask for it.</span>
+        <div class="order">L R C LFE Back-L Back-R Side-L Side-R</div></div></div>
   </section>
 
   <section class="panel">
@@ -129,8 +123,8 @@ code { font: 13px var(--font-mono); background: color-mix(in srgb, var(--accent)
     <h2 id="use-h">Using the file in Head Tracking Host</h2>
     <ol>
       <li>Put the converted WAVs in a folder of their own (unzip first if you saved a ZIP).</li>
-      <li><a href="https://angelofarina.it/X-MCFX.htm" target="_blank" rel="noopener">X-MCFX</a> install it and load the plugin <code>X-MCFX-Convolver_8x2</code> in HTH, <b>Input 7.1</b>.</li>
-      <li>In X-MCFX, choose the folder and pick a file. The channel count is stored in the file; if X-MCFX asks anyway, enter <b>8</b> (or <b>7</b> for the Reddit layout).</li>
+      <li>Install <a href="https://angelofarina.it/X-MCFX.htm" target="_blank" rel="noopener">X-MCFX</a> and load the plugin <code>X-MCFX-Convolver_8x2</code> in HTH, <b>Input 7.1</b>.</li>
+      <li>In X-MCFX, choose the folder and pick a file. The channel count is stored in the file; if X-MCFX asks anyway, enter <b>8</b>.</li>
       <li>Check with the speaker test of Windows (or Audio MIDI Setup on the Mac) that every channel comes from the right place. If not, reroute in HTH under <b>Channels</b>.</li>
     </ol>
     <p class="note" style="margin-top:10px">HeSuVi has no LFE filter of its own, so the LFE channel plays through the centre filter (bass cannot be localised). Head tracking is not possible with HeSuVi files.</p>
@@ -147,7 +141,6 @@ const HESUVI14 = { FL: [0, 1], SL: [2, 3], BL: [4, 5], FC: [6, 13], FR: [8, 7], 
 const HESUVI7 = { FL: [0, 1], SL: [2, 3], BL: [4, 5], FC: [6, 6], FR: [1, 0], SR: [3, 2], BR: [5, 4] };
 const LAYOUTS = {
   8: ["FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR"],  // so that HTH "Swap side/rear" is right, like with other plugins
-  7: ["FL", "FR", "FC", "SL", "SR", "BL", "BR"],         // Reddit guide order
 };
 
 function readWav(buffer) {
@@ -296,7 +289,7 @@ let results = []; // {name, out: ArrayBuffer, info, error, ears, example}
 // Opened as a local file, a single file is saved as WAV directly.
 function inClaude() { return typeof window.claude?.use === "function"; }
 
-function inputs() { return $("layout7").checked ? 7 : 8; }
+function inputs() { return 8; }
 function outName(name) {
   const base = name.split("/").pop().replace(/\.wav$/i, "");
   return `${base} (X-MCFX ${inputs()}in).wav`;
@@ -378,11 +371,6 @@ async function addFiles(fileList) {
   render();
 }
 
-function rebuild(r) {
-  const ears = toXmcfx(r.wav, inputs());
-  return { name: r.name, wav: r.wav, ears, out: writeWavFloat(ears, r.wav.sampleRate, inputs()), info: r.info, example: r.example, error: null };
-}
-
 async function save() {
   const ok = results.filter((r) => !r.error && !r.example);
   if (!ok.length) return;
@@ -428,9 +416,6 @@ const drop = $("drop");
 ["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
 ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
 drop.addEventListener("drop", (e) => addFiles([...e.dataTransfer.files]));
-document.querySelectorAll('input[name="layout"]').forEach((el) => el.addEventListener("change", () => {
-  results = results.map((r) => r.wav ? rebuild(r) : r); render();
-}));
 $("save").addEventListener("click", save);
 window.addEventListener("resize", () => render());
 results = [example()];
