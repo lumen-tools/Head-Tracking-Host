@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body>
+<title>HeSuVi to X-MCFX</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: one working column - options, drop zone, converted files, then how to use it in HTH. */
+:root {
+  --bg: #f3f5f7;
+  --panel: #ffffff;
+  --ink: #17202a;
+  --muted: #5b6875;
+  --line: #d6dde4;
+  --accent: #0f6f8f;        /* signal-blue, like a scope trace */
+  --accent-ink: #ffffff;
+  --trace-l: #0f6f8f;
+  --trace-r: #b4552d;
+  --ok: #1f7a4a;
+  --bad: #b3261e;
+  --font-display: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11161b; --panel: #182028; --ink: #e6ebf0; --muted: #9aa7b3; --line: #2b3640;
+    --accent: #4fb3d4; --accent-ink: #0b1216; --trace-l: #4fb3d4; --trace-r: #e08a5e;
+    --ok: #5cc28a; --bad: #f08a80; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11161b; --panel: #182028; --ink: #e6ebf0; --muted: #9aa7b3; --line: #2b3640;
+  --accent: #4fb3d4; --accent-ink: #0b1216; --trace-l: #4fb3d4; --trace-r: #e08a5e;
+  --ok: #5cc28a; --bad: #f08a80; color-scheme: dark;
+}
+body {
+  background: var(--bg); color: var(--ink); font: 15px/1.55 var(--font-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 48px;
+}
+.wrap { max-width: 860px; margin: 0 auto; display: grid; gap: 22px; }
+h1 { font: 600 30px/1.15 var(--font-display); margin: 0; text-wrap: balance; letter-spacing: -0.01em; }
+h2 { font: 600 17px/1.3 var(--font-display); margin: 0 0 10px; }
+p { margin: 0; max-width: 65ch; }
+.lede { color: var(--muted); margin-top: 8px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; min-width: 0; }
+.label { font: 500 11px/1 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+.options { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.opt { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line); border-radius: 8px; padding: 12px; cursor: pointer; }
+.opt:has(input:checked) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.opt input { margin-top: 4px; accent-color: var(--accent); }
+.opt b { display: block; font-weight: 600; }
+.opt span { color: var(--muted); font-size: 13.5px; }
+.order { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink); }
+.drop {
+  border: 2px dashed var(--line); border-radius: 10px; padding: 28px 18px; text-align: center;
+  display: grid; gap: 10px; justify-items: center; transition: border-color .15s, background .15s;
+}
+.drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.drop p { color: var(--muted); }
+button, .btn {
+  font: 600 14px/1 var(--font-body); border-radius: 7px; border: 1px solid var(--accent);
+  background: var(--accent); color: var(--accent-ink); padding: 10px 16px; cursor: pointer;
+}
+button.ghost { background: transparent; color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+button:focus-visible, .opt:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.files { display: grid; gap: 10px; }
+.file { display: grid; grid-template-columns: 1fr auto; gap: 6px 14px; align-items: center; border-top: 1px solid var(--line); padding-top: 10px; }
+.file:first-child { border-top: 0; padding-top: 0; }
+.fname { font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+.meta { font: 12.5px/1.4 var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; grid-column: 1 / -1; }
+.state { font: 500 12px/1 var(--font-mono); padding: 5px 8px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+.state.ok { color: var(--ok); } .state.bad { color: var(--bad); } .state.example { color: var(--muted); }
+canvas.ir { grid-column: 1 / -1; width: 100%; height: 56px; display: block; }
+.legend { display: flex; gap: 14px; font: 12px var(--font-mono); color: var(--muted); }
+.legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 6px; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.note { color: var(--muted); font-size: 13.5px; }
+ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+code { font: 13px var(--font-mono); background: color-mix(in srgb, var(--accent) 10%, transparent); padding: 1px 5px; border-radius: 4px; }
+.msg { font-size: 14px; }
+.msg.bad { color: var(--bad); } .msg.ok { color: var(--ok); }
+@media (prefers-reduced-motion: reduce) { .drop { transition: none; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>HeSuVi → X-MCFX</h1>
+    <p class="lede">Converts HeSuVi WAVs (e.g. from the HRTF Database on Airtable) into the matrix format of the X-MCFX convolver. Everything happens in your browser, nothing is uploaded.</p>
+  </header>
+
+  <section class="panel" aria-labelledby="opt-h">
+    <div class="label" id="opt-h">Plugin inputs</div>
+    <div class="options">
+      <label class="opt"><input type="radio" name="layout" id="layout8" value="8" checked>
+        <div><b>8 inputs – 7.1 as in HTH (recommended)</b>
+          <span>In HTH, set <b>Channels</b> to “Swap side/rear”, as with other plugins. The channel count is stored in the file, so X-MCFX does not ask for it.</span>
+          <div class="order">L R C LFE Back-L Back-R Side-L Side-R</div></div></label>
+      <label class="opt"><input type="radio" name="layout" id="layout7" value="7">
+        <div><b>7 inputs – as in the Reddit guide</b>
+          <span>For other hosts. Reroute in HTH.</span>
+          <div class="order">L R C Side-L Side-R Back-L Back-R</div></div></label>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="drop" id="drop">
+      <h2>Drop HeSuVi WAVs or a ZIP here</h2>
+      <p>14-channel WAVs (and 7-channel variants). Several files or a ZIP from Airtable work too.</p>
+      <input type="file" id="picker" accept=".wav,.zip,audio/wav" multiple hidden>
+      <button type="button" id="pick">Choose files</button>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="res-h">
+    <div class="actions">
+      <div class="label" id="res-h" style="margin:0">Converted</div>
+      <div class="legend"><span><i style="background:var(--trace-l)"></i>left ear</span><span><i style="background:var(--trace-r)"></i>right ear</span></div>
+    </div>
+    <div class="files" id="files" style="margin-top:12px"></div>
+    <div class="actions" style="margin-top:14px">
+      <p class="msg" id="msg"></p>
+      <button type="button" id="save" disabled>Save as ZIP</button>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="use-h">
+    <h2 id="use-h">Using the file in Head Tracking Host</h2>
+    <ol>
+      <li>Put the converted WAVs in a folder of their own (unzip first if you saved a ZIP).</li>
+      <li><a href="https://angelofarina.it/X-MCFX.htm" target="_blank" rel="noopener">X-MCFX</a> install it and load the plugin <code>X-MCFX-Convolver_8x2</code> in HTH, <b>Input 7.1</b>.</li>
+      <li>In X-MCFX, choose the folder and pick a file. The channel count is stored in the file; if X-MCFX asks anyway, enter <b>8</b> (or <b>7</b> for the Reddit layout).</li>
+      <li>Check with the speaker test of Windows (or Audio MIDI Setup on the Mac) that every channel comes from the right place. If not, reroute in HTH under <b>Channels</b>.</li>
+    </ol>
+    <p class="note" style="margin-top:10px">HeSuVi has no LFE filter of its own, so the LFE channel plays through the centre filter (bass cannot be localised). Head tracking is not possible with HeSuVi files.</p>
+  </section>
+</div>
+
+<script>
+// CORE START - pure functions (also used by the test)
+const SPEAKERS = ["FL", "FR", "FC", "SL", "SR", "BL", "BR"];
+// HeSuVi 14-channel order: FL-L FL-R SL-L SL-R BL-L BL-R FC-L FR-R FR-L SR-R SR-L BR-R BR-L FC-R
+// [channel for the left ear, channel for the right ear]
+const HESUVI14 = { FL: [0, 1], SL: [2, 3], BL: [4, 5], FC: [6, 13], FR: [8, 7], SR: [10, 9], BR: [12, 11] };
+// 7-channel files hold the left side; the right side mirrors it.
+const HESUVI7 = { FL: [0, 1], SL: [2, 3], BL: [4, 5], FC: [6, 6], FR: [1, 0], SR: [3, 2], BR: [5, 4] };
+const LAYOUTS = {
+  8: ["FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR"],  // so that HTH "Swap side/rear" is right, like with other plugins
+  7: ["FL", "FR", "FC", "SL", "SR", "BL", "BR"],         // Reddit guide order
+};
+
+function readWav(buffer) {
+  const v = new DataView(buffer);
+  const tag = (o) => String.fromCharCode(v.getUint8(o), v.getUint8(o + 1), v.getUint8(o + 2), v.getUint8(o + 3));
+  if (buffer.byteLength < 12 || tag(0) !== "RIFF" || tag(8) !== "WAVE") throw new Error("not a WAV file");
+  let fmt = null, dataOff = -1, dataLen = 0, o = 12;
+  while (o + 8 <= buffer.byteLength) {
+    const id = tag(o), len = v.getUint32(o + 4, true);
+    if (id === "fmt ") {
+      let format = v.getUint16(o + 8, true);
+      const channels = v.getUint16(o + 10, true), sampleRate = v.getUint32(o + 12, true);
+      const blockAlign = v.getUint16(o + 20, true), bits = v.getUint16(o + 22, true);
+      if (format === 0xFFFE && len >= 40) format = v.getUint16(o + 32, true);
+      fmt = { format, channels, sampleRate, blockAlign, bits };
+    } else if (id === "data") {
+      dataOff = o + 8;
+      dataLen = Math.min(len, buffer.byteLength - dataOff);
+      break;
+    }
+    o += 8 + len + (len & 1);
+  }
+  if (!fmt || dataOff < 0) throw new Error("WAV without fmt or data chunk");
+  const { format, channels, blockAlign, bits } = fmt;
+  const bytes = bits / 8;
+  if (!(format === 1 && [2, 3, 4].includes(bytes)) && !(format === 3 && [4, 8].includes(bytes)))
+    throw new Error(`unsupported format (${format === 3 ? "Float" : "PCM"} ${bits} bit)`);
+  const frames = Math.floor(dataLen / blockAlign);
+  const out = Array.from({ length: channels }, () => new Float32Array(frames));
+  for (let f = 0; f < frames; f++) {
+    for (let c = 0; c < channels; c++) {
+      const p = dataOff + f * blockAlign + c * bytes;
+      let s;
+      if (format === 3) s = bytes === 4 ? v.getFloat32(p, true) : v.getFloat64(p, true);
+      else if (bytes === 2) s = v.getInt16(p, true) / 32768;
+      else if (bytes === 3) s = ((v.getUint8(p) | (v.getUint8(p + 1) << 8) | (v.getInt8(p + 2) << 16))) / 8388608;
+      else s = v.getInt32(p, true) / 2147483648;
+      out[c][f] = s;
+    }
+  }
+  return { sampleRate: fmt.sampleRate, channels, frames, bits, isFloat: format === 3, data: out };
+}
+
+// X-MCFX matrix: one channel per output (left ear, right ear); in each, the filters of all
+// inputs one after the other ("columns = inputs, rows = outputs").
+function toXmcfx(wav, inputs) {
+  const map = wav.channels === 14 ? HESUVI14 : wav.channels === 7 ? HESUVI7 : null;
+  if (!map) throw new Error(`${wav.channels} channels – HeSuVi files have 14 (or 7)`);
+  const layout = LAYOUTS[inputs];
+  const n = wav.frames;
+  const ears = [new Float32Array(n * layout.length), new Float32Array(n * layout.length)];
+  layout.forEach((sp, i) => {
+    // HeSuVi has no LFE filter; bass is not directional, so LFE plays through the centre filters.
+    const src = sp === "LFE" ? "FC" : sp;
+    for (let ear = 0; ear < 2; ear++) ears[ear].set(wav.data[map[src][ear]], i * n);
+  });
+  return ears;
+}
+
+// With `inputs`, the number of inputs goes into a LIST/INFO "IKEY" tag - X-MCFX reads it from
+// there (its "Store into wavefile metadata") and does not ask for the channel count.
+function writeWavFloat(channels, sampleRate, inputs) {
+  const n = channels[0].length, ch = channels.length, dataLen = n * ch * 4;
+  let key = inputs ? String(inputs) + "\0" : "";
+  if (key.length % 2) key += "\0";
+  const list = key ? 20 + key.length : 0; // LIST + size + INFO + IKEY + size + text
+  const buf = new ArrayBuffer(44 + list + dataLen), v = new DataView(buf);
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, "RIFF"); v.setUint32(4, 36 + list + dataLen, true); str(8, "WAVE");
+  str(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 3, true); v.setUint16(22, ch, true);
+  v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * ch * 4, true);
+  v.setUint16(32, ch * 4, true); v.setUint16(34, 32, true);
+  if (list) {
+    str(36, "LIST"); v.setUint32(40, list - 8, true); str(44, "INFO");
+    str(48, "IKEY"); v.setUint32(52, key.length, true); str(56, key);
+  }
+  str(36 + list, "data"); v.setUint32(40 + list, dataLen, true);
+  let p = 44 + list;
+  for (let i = 0; i < n; i++) for (let c = 0; c < ch; c++, p += 4) v.setFloat32(p, channels[c][i], true);
+  return buf;
+}
+
+const CRC = (() => { const t = new Uint32Array(256); for (let i = 0; i < 256; i++) { let c = i; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[i] = c >>> 0; } return t; })();
+function crc32(u8) { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+
+// ZIP without compression (WAV hardly compresses); file names in UTF-8.
+function makeZip(files) {
+  const enc = new TextEncoder(), parts = [], central = [];
+  let offset = 0;
+  for (const { name, data } of files) {
+    const nm = enc.encode(name), u8 = new Uint8Array(data), crc = crc32(u8);
+    const h = new DataView(new ArrayBuffer(30));
+    h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true);
+    h.setUint32(14, crc, true); h.setUint32(18, u8.length, true); h.setUint32(22, u8.length, true);
+    h.setUint16(26, nm.length, true);
+    parts.push(h.buffer, nm, u8);
+    const c = new DataView(new ArrayBuffer(46));
+    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true);
+    c.setUint32(16, crc, true); c.setUint32(20, u8.length, true); c.setUint32(24, u8.length, true);
+    c.setUint16(28, nm.length, true); c.setUint32(42, offset, true);
+    central.push(c.buffer, nm);
+    offset += 30 + nm.length + u8.length;
+  }
+  const cdSize = central.reduce((s, b) => s + b.byteLength, 0);
+  const e = new DataView(new ArrayBuffer(22));
+  e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true);
+  e.setUint32(12, cdSize, true); e.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, e.buffer], { type: "application/zip" });
+}
+
+// Reads the .wav entries of a ZIP (stored or deflated).
+async function readZip(buffer, inflateRaw) {
+  const v = new DataView(buffer), u8 = new Uint8Array(buffer), dec = new TextDecoder();
+  let e = buffer.byteLength - 22;
+  while (e >= 0 && v.getUint32(e, true) !== 0x06054b50) e--;
+  if (e < 0) throw new Error("not a valid ZIP");
+  const count = v.getUint16(e + 10, true);
+  let p = v.getUint32(e + 16, true);
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    if (v.getUint32(p, true) !== 0x02014b50) break;
+    const method = v.getUint16(p + 10, true), size = v.getUint32(p + 20, true);
+    const nLen = v.getUint16(p + 28, true), xLen = v.getUint16(p + 30, true), cLen = v.getUint16(p + 32, true);
+    const local = v.getUint32(p + 42, true);
+    const name = dec.decode(u8.subarray(p + 46, p + 46 + nLen));
+    p += 46 + nLen + xLen + cLen;
+    if (!/\.wav$/i.test(name) || name.includes("__MACOSX/") || name.split("/").pop().startsWith("._")) continue;
+    const start = local + 30 + v.getUint16(local + 26, true) + v.getUint16(local + 28, true);
+    const raw = u8.slice(start, start + size);
+    const data = method === 0 ? raw.buffer : method === 8 ? await inflateRaw(raw) : null;
+    out.push({ name, data, error: data ? null : "unsupported ZIP compression" });
+  }
+  return out;
+}
+// CORE END
+
+async function inflateRaw(u8) {
+  const stream = new Blob([u8]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  return await new Response(stream).arrayBuffer();
+}
+
+const $ = (id) => document.getElementById(id);
+let results = []; // {name, out: ArrayBuffer, info, error, ears, example}
+
+// On claude.ai a page may save only some file types (no WAV) - there the result comes as a ZIP.
+// Opened as a local file, a single file is saved as WAV directly.
+function inClaude() { return typeof window.claude?.use === "function"; }
+
+function inputs() { return $("layout7").checked ? 7 : 8; }
+function outName(name) {
+  const base = name.split("/").pop().replace(/\.wav$/i, "");
+  return `${base} (X-MCFX ${inputs()}in).wav`;
+}
+
+function drawIr(canvas, ears) {
+  const dpr = window.devicePixelRatio || 1, w = canvas.clientWidth || 600, h = canvas.clientHeight || 56;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const g = canvas.getContext("2d"); g.scale(dpr, dpr);
+  const css = getComputedStyle(document.documentElement);
+  const colors = [css.getPropertyValue("--trace-l").trim(), css.getPropertyValue("--trace-r").trim()];
+  const line = css.getPropertyValue("--line").trim();
+  const n = ears[0].length, segs = inputs();
+  g.strokeStyle = line; g.lineWidth = 1;
+  for (let s = 1; s < segs; s++) { const x = Math.round(w * s / segs) + .5; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke(); }
+  let peak = 1e-9; for (const e of ears) for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(e[i]));
+  ears.forEach((e, k) => {
+    g.strokeStyle = colors[k]; g.lineWidth = 1; g.beginPath();
+    const step = n / w, mid = h / 2;
+    for (let x = 0; x < w; x++) {
+      let mx = 0; const a = Math.floor(x * step), b = Math.min(n, Math.floor((x + 1) * step) + 1);
+      for (let i = a; i < b; i++) mx = Math.max(mx, Math.abs(e[i]));
+      const y = (mx / peak) * (h / 2 - 2) * (k ? -1 : 1);
+      g.moveTo(x + .5, mid); g.lineTo(x + .5, mid - y);
+    }
+    g.stroke();
+  });
+  g.fillStyle = css.getPropertyValue("--muted").trim(); g.font = "10px " + css.getPropertyValue("--font-mono");
+  LAYOUTS[segs].forEach((sp, i) => g.fillText(sp || "LFE", w * i / segs + 4, 11));
+}
+
+function render() {
+  const list = $("files");
+  list.innerHTML = "";
+  for (const r of results) {
+    const row = document.createElement("div"); row.className = "file";
+    const name = document.createElement("div"); name.className = "fname";
+    name.textContent = r.error ? r.name : outName(r.name);
+    const st = document.createElement("span");
+    st.className = "state " + (r.error ? "bad" : r.example ? "example" : "ok");
+    st.textContent = r.error ? "error" : r.example ? "example" : "ready";
+    const meta = document.createElement("div"); meta.className = "meta";
+    meta.textContent = r.error ? r.error : r.info;
+    row.append(name, st, meta);
+    if (r.ears) { const c = document.createElement("canvas"); c.className = "ir"; row.append(c); requestAnimationFrame(() => drawIr(c, r.ears)); }
+    list.append(row);
+  }
+  const ok = results.filter((r) => !r.error && !r.example);
+  $("save").disabled = ok.length === 0;
+  $("save").textContent = ok.length > 1 ? `Save ${ok.length} files as ZIP`
+                        : inClaude() ? "Save as ZIP" : "Save WAV";
+}
+
+function convertOne(name, buffer) {
+  try {
+    const wav = readWav(buffer);
+    const ears = toXmcfx(wav, inputs());
+    const ms = (wav.frames / wav.sampleRate * 1000).toFixed(0);
+    return {
+      name, wav, ears, out: writeWavFloat(ears, wav.sampleRate, inputs()),
+      info: `${wav.channels} → 2 channels · ${wav.sampleRate} Hz · ${wav.frames} samples (${ms} ms) per filter · ${wav.isFloat ? "Float" : "PCM"} ${wav.bits} bit → Float 32 bit`,
+    };
+  } catch (e) { return { name, error: e.message }; }
+}
+
+async function addFiles(fileList) {
+  $("msg").textContent = ""; $("msg").className = "msg";
+  results = results.filter((r) => !r.example);
+  for (const f of fileList) {
+    const buf = await f.arrayBuffer();
+    if (/\.zip$/i.test(f.name)) {
+      try {
+        const entries = await readZip(buf, inflateRaw);
+        if (!entries.length) results.push({ name: f.name, error: "no WAV files in the ZIP" });
+        for (const e of entries) results.push(e.error ? { name: e.name, error: e.error } : convertOne(e.name, e.data));
+      } catch (e) { results.push({ name: f.name, error: e.message }); }
+    } else results.push(convertOne(f.name, buf));
+  }
+  render();
+}
+
+function rebuild(r) {
+  const ears = toXmcfx(r.wav, inputs());
+  return { name: r.name, wav: r.wav, ears, out: writeWavFloat(ears, r.wav.sampleRate, inputs()), info: r.info, example: r.example, error: null };
+}
+
+async function save() {
+  const ok = results.filter((r) => !r.error && !r.example);
+  if (!ok.length) return;
+  const zip = makeZip(ok.map((r) => ({ name: outName(r.name), data: r.out })));
+  const filename = ok.length === 1 ? outName(ok[0].name).replace(/\.wav$/, ".zip") : `HeSuVi X-MCFX (${ok.length} files).zip`;
+  const msg = $("msg");
+  let downloads = null;
+  try { downloads = window.claude?.use ? await window.claude.use("downloads") : null; } catch { downloads = null; }
+  if (downloads) {
+    try { await downloads.save({ filename, data: zip }); msg.className = "msg ok"; msg.textContent = "Saved."; }
+    catch (e) {
+      msg.className = "msg" + (e?.code === "declined" ? "" : " bad");
+      msg.textContent = e?.code === "declined" ? "Saving cancelled." :
+        e?.code === "rate_limited" ? "A save dialog is already open." : "Saving is not possible here (" + (e?.code || "error") + ").";
+    }
+    return;
+  }
+  // Opened as a local file in a normal browser: plain download - one file as WAV, several as ZIP.
+  const single = ok.length === 1;
+  const blob = single ? new Blob([ok[0].out], { type: "audio/wav" }) : zip;
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = single ? outName(ok[0].name) : filename;
+  document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+
+// Example so the page shows what it does before a file is added: a synthetic 14-channel
+// HeSuVi file (decaying clicks), clearly marked as an example and not saved.
+function example() {
+  const sr = 48000, n = 2048, data = Array.from({ length: 14 }, () => new Float32Array(n));
+  for (const sp of SPEAKERS) {
+    const [l, r] = HESUVI14[sp];
+    const near = { FL: l, SL: l, BL: l, FR: r, SR: r, BR: r, FC: -1 }[sp];
+    for (const [ch, delay, gain] of [[l, near === l ? 20 : 48, near === l || near === -1 ? 1 : .55], [r, near === r ? 20 : 48, near === r || near === -1 ? 1 : .55]])
+      for (let i = delay; i < n; i++) data[ch][i] += gain * Math.exp(-(i - delay) / 90) * Math.cos((i - delay) * 0.35);
+  }
+  const wav = { sampleRate: sr, channels: 14, frames: n, bits: 32, isFloat: true, data };
+  const ears = toXmcfx(wav, inputs());
+  return { name: "Example.wav", wav, ears, example: true, info: "Example – this is what a converted file looks like. Drop a real HeSuVi WAV." };
+}
+
+$("pick").addEventListener("click", () => $("picker").click());
+$("picker").addEventListener("change", (e) => { addFiles([...e.target.files]); e.target.value = ""; });
+const drop = $("drop");
+["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", (e) => addFiles([...e.dataTransfer.files]));
+document.querySelectorAll('input[name="layout"]').forEach((el) => el.addEventListener("change", () => {
+  results = results.map((r) => r.wav ? rebuild(r) : r); render();
+}));
+$("save").addEventListener("click", save);
+window.addEventListener("resize", () => render());
+results = [example()];
+render();
+</script>
+
+</body></html>

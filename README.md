@@ -250,6 +250,24 @@ each attempt).
 - If the last start did not complete, the next one starts without the audio device and plugin of
   the default save state (*Safe start*) – choose them again; the save state itself is unchanged.
 
+## HeSuVi presets (X-MCFX)
+
+HeSuVi HRIRs (14-channel WAVs, e.g. from the HRTF Database on Airtable) can be used in Head Tracking
+Host with the free [X-MCFX](https://angelofarina.it/X-MCFX.htm) convolver. X-MCFX needs them in its
+own matrix format; [tools/hesuvi-to-xmcfx.html](tools/hesuvi-to-xmcfx.html) converts them.
+
+1. Download `tools/hesuvi-to-xmcfx.html` and open it in a browser (it works offline; nothing is
+   uploaded).
+2. Drop the HeSuVi WAVs (or a ZIP) on it and save the converted WAV. The file stores its channel
+   count, so X-MCFX does not ask for it.
+3. Install X-MCFX and load `X-MCFX-Convolver_8x2` in Head Tracking Host with **Input 7.1**. In
+   X-MCFX choose the folder with the converted WAVs and pick one.
+4. Set **Channels** to *Swap side/rear*, as with most other plugins, and check the result with the
+   speaker test of Windows or Audio MIDI Setup.
+
+HeSuVi has no LFE filter, so the LFE channel plays through the centre filter. Head tracking is not
+possible with HeSuVi files – they are fixed to one head position.
+
 ## Troubleshooting
 
 | Status | What to do |
