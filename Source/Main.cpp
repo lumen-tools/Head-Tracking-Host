@@ -11,6 +11,7 @@
 #include "BinaryData.h"
 #include "DirectDevice.h"
 #include "SystemVolume.h"
+#include "SaveStates.h"
 
 #include <array>
 #include <atomic>
@@ -25,7 +26,6 @@ void requestMicrophoneAccess (std::function<void (bool)> callback); // Microphon
 
 namespace
 {
-constexpr int numEqSlots = 5;
 constexpr int defaultOscPort = 9000; // port of the IEM SceneRotator format (e.g. Bridgehead profile "IEM Scene Rotator YPR")
 constexpr int minWidth = 900;
 constexpr int barHeight = 268;
@@ -54,32 +54,6 @@ std::vector<InputLayout> inputLayouts()
              { "Stereo (2 channels)", AudioChannelSet::stereo() } };
 }
 
-// Portable: the settings file lives next to the program (EXE on Windows, .app on the Mac), so
-// copying the folder takes all settings along. Falls back to the user folder if that place is
-// not writable (e.g. a protected folder, or macOS running an unsigned app from a hidden
-// read-only "AppTranslocation" location until it has been moved once).
-std::unique_ptr<PropertiesFile> openSettings()
-{
-    PropertiesFile::Options o;
-    o.applicationName     = "Head Tracking Host";
-    o.folderName          = "Head Tracking Host";
-    o.filenameSuffix      = ".settings";
-    o.osxLibrarySubFolder = "Application Support";
-
-    const auto userFile = o.getDefaultFile();
-    const auto app = File::getSpecialLocation (File::currentApplicationFile);
-    const auto folder = app.getParentDirectory();
-    const auto portableFile = folder.getChildFile ("Head Tracking Host.settings");
-
-    const bool translocated = app.getFullPathName().contains ("/AppTranslocation/");
-    if (! translocated && folder.hasWriteAccess())
-    {
-        if (! portableFile.existsAsFile() && userFile.existsAsFile())
-            userFile.copyFileTo (portableFile); // take over existing settings once
-        return std::make_unique<PropertiesFile> (portableFile, o);
-    }
-    return std::make_unique<PropertiesFile> (o);
-}
 
 Array<File> pluginFolders()
 {
@@ -714,7 +688,7 @@ public:
         {
             g.setColour (Colours::grey);
             g.setFont (FontOptions (14.0f));
-            g.drawText ("Empty slot", plot, Justification::centred);
+            g.drawText ("No correction", plot, Justification::centred);
             return;
         }
 
@@ -1158,21 +1132,38 @@ class MainComponent : public Component,
                       private OSCReceiver::Listener<OSCReceiver::MessageLoopCallback>,
                       private ComponentListener,
                       private ChangeListener,
+                      private AudioProcessorListener,
                       private Timer
 {
 public:
-    MainComponent()
+    // Starts with the settings of a save state (stateFile; none: standard settings). Loading
+    // another save state replaces the whole component (see onLoadState), so everything - audio
+    // device, plugin, every switch - comes from the save state.
+    MainComponent (PropertiesFile& cacheFile, std::unique_ptr<PropertySet> state, const File& stateFile, bool appStart)
+        : cache (cacheFile), currentStateFile (stateFile)
     {
-        settings = openSettings();
+        settings = state != nullptr ? std::move (state) : std::make_unique<PropertySet>();
         addDefaultFormatsToManager (formatManager);
 
         // Startup crash guard: if the previous start never finished, start without opening the
-        // saved audio device and plugin. The flag is written to disk right away and cleared once
-        // the app has been running for a few seconds (and on a normal quit).
-        safeMode = settings->getBoolValue ("startupPending", false);
-        settings->setValue ("startupPending", true);
-        settings->saveIfNeeded();
+        // audio device and plugin of the save state. The flag is written to disk right away and
+        // cleared once the app has been running for a few seconds (and on a normal quit).
+        safeMode = appStart && cache.getBoolValue ("startupPending", false);
+        cache.setValue ("startupPending", true);
+        cache.saveIfNeeded();
         setSize (minWidth, barHeight + 360);
+
+        // Save state: name (or "No save state"), * while something is not saved.
+        sidebar.addAndMakeVisible (stateBox);
+        stateBox.setTooltip ("The save state in use. Choose another one to load it. "
+                             "* = changes that are not saved yet.");
+        stateBox.onChange = [this] { stateBoxChanged(); };
+        sidebar.addAndMakeVisible (stateSaveButton);
+        stateSaveButton.setTooltip ("Save all settings into the save state in use (or into a new one).");
+        stateSaveButton.onClick = [this] { saveCurrentState(); };
+        sidebar.addAndMakeVisible (stateMenuButton);
+        stateMenuButton.onClick = [this] { showStateMenu(); };
+        refreshStateList();
 
         sidebar.addAndMakeVisible (statusDot);
         sidebar.addAndMakeVisible (statusLabel);
@@ -1199,31 +1190,7 @@ public:
         sidebar.addAndMakeVisible (portEditor);
         portEditor.setInputRestrictions (5, "0123456789");
         portEditor.setJustification (Justification::centred);
-        // One-time switch from the earlier default (port 8000, DaVinci Resolve profile) to IEM (9000).
-        if (! settings->getBoolValue ("iemDefaults", false))
-        {
-            if (settings->getIntValue ("oscPort", 8000) == 8000)
-                settings->setValue ("oscPort", defaultOscPort);
-            settings->setValue ("iemDefaults", true);
-        }
         portEditor.setText (String (settings->getIntValue ("oscPort", defaultOscPort)));
-
-        // One-time: "Invert" now means inverted relative to the normal (IEM/Virtuoso) orientation.
-        // Older versions stored pitch relative to the tracker's raw angles, i.e. flipped.
-        if (! settings->getBoolValue ("pitchConvention2", false))
-        {
-            for (auto& key : settings->getAllProperties().getAllKeys())
-                if (key.endsWith (".invertPitch"))
-                    settings->setValue (key, ! settings->getBoolValue (key));
-            for (auto& key : settings->getAllProperties().getAllKeys())
-                if (key.endsWith (".paramPitch") || key.endsWith (".state"))
-                {
-                    const auto prefix = key.upToLastOccurrenceOf (".", false, false);
-                    if (! settings->containsKey (prefix + ".invertPitch"))
-                        settings->setValue (prefix + ".invertPitch", false); // old default (on) -> off
-                }
-            settings->setValue ("pitchConvention2", true);
-        }
         portEditor.onReturnKey = portEditor.onFocusLost = [this] { applyPort(); };
 
         // (layoutLabel drawn by the sidebar)
@@ -1251,24 +1218,18 @@ public:
         channelsButton.setTooltip ("Choose which audio input feeds each plugin channel.");
         loadInputMap();
 
-        // Headphone correction (AutoEq profiles; global, works with or without speaker simulation)
+        // Headphone correction (one AutoEq profile per save state; works with or without speaker simulation)
         sidebar.addAndMakeVisible (autoEqButton);
         autoEqButton.getProperties().set ("switch", true);
         autoEqButton.setTooltip ("AutoEq headphone correction - works with or without speaker simulation.");
         autoEqButton.setToggleState (settings->getBoolValue ("autoeqEnabled", false), dontSendNotification);
         autoEqButton.onClick = [this] { settings->setValue ("autoeqEnabled", autoEqButton.getToggleState()); applyAutoEq(); };
-        sidebar.addAndMakeVisible (autoEqSlotBox);
-        refreshAutoEqSlots();
-        autoEqSlotBox.setSelectedItemIndex (jlimit (0, numEqSlots - 1, settings->getIntValue ("autoeqSlot", 0)), dontSendNotification);
-        autoEqSlotBox.onChange = [this]
-        {
-            settings->setValue ("autoeqSlot", autoEqSlotBox.getSelectedItemIndex());
-            applyAutoEq();
-            notifyHeadphoneWindow();
-        };
+        sidebar.addAndMakeVisible (autoEqNameLabel);
+        autoEqNameLabel.setColour (Label::textColourId, ui::label);
+        autoEqNameLabel.setMinimumHorizontalScale (0.7f);
         sidebar.addAndMakeVisible (autoEqSearchButton);
         autoEqSearchButton.onClick = [this] { showHeadphoneWindow(); };
-        autoEqSearchButton.setTooltip ("Headphone correction: slots, curve, database search and file import.");
+        autoEqSearchButton.setTooltip ("Headphone correction: curve, database search and file import.");
         applyAutoEq();
         updateDownmix(); // dry path is ready even before a plugin is loaded
 
@@ -1277,7 +1238,7 @@ public:
         sidebar.addAndMakeVisible (volumeFollowButton);
         volumeFollowButton.getProperties().set ("switch", true);
         volumeFollowButton.setToggleState (settings->getBoolValue ("volumeKeysFollow", true), dontSendNotification);
-        volumeFollowButton.setTooltip ("Global setting - applies to all plugins. The system volume (keys, slider) changes "
+        volumeFollowButton.setTooltip ("The system volume (keys, slider) changes "
                                        "the virtual device you play into. With this on, Head Tracking Host passes it on to "
                                        "the output device (your headphones), so you don't have to change the headphones' "
                                        "volume in the sound settings. When switched on, the virtual device first takes "
@@ -1347,7 +1308,7 @@ public:
         sidebar.addAndMakeVisible (startSoundButton);
         startSoundButton.getProperties().set ("switch", true);
         startSoundButton.setToggleState (settings->getBoolValue ("flexAsioStartSound", false), dontSendNotification);
-        startSoundButton.setTooltip ("Global setting - applies to all plugins. FlexASIO only starts when its input "
+        startSoundButton.setTooltip ("FlexASIO only starts when its input "
                                      "already receives audio. With this on, a short, very quiet noise is played into "
                                      "FlexASIO's input (e.g. VB-Audio Hi-Fi Cable) whenever FlexASIO is opened - at "
                                      "program start or when choosing it in Audio settings - so nothing has to be "
@@ -1412,11 +1373,17 @@ public:
             loadPlugin (lastPlugin, settings->getValue ("pluginName"));
         // Plugins are scanned once (first start) and afterwards only on "Rescan plugins", so
         // no plugin is opened in the background on a normal start.
-        if (! safeMode && ! settings->getBoolValue ("pluginsScanned", false))
+        if (! safeMode && ! cache.getBoolValue ("pluginsScanned", false))
             startPluginScan (false);
 
+        // From here on, every change counts as "not saved yet".
+        markStateSaved();
+        updateStateDisplay();
         startTimerHz (2);
     }
+
+    // Set by the window: replaces this component by one with these settings (see the constructor).
+    std::function<void (std::unique_ptr<PropertySet>, const File&)> onLoadState;
 
     // Opens the last audio device (e.g. ASIO / FlexASIO or CoreAudio / aggregate device).
     void initialiseAudio (bool inputAllowed)
@@ -1430,16 +1397,21 @@ public:
         audioInitialised = true;
         audioStartTime = lastCallbackTime = Time::getMillisecondCounter();
         lastCallbackCount = engine.getCallbackCount();
+        audioBaseline = audioStateText(); // the device as the save state opened it counts as saved
         checkFeedback();
     }
 
     ~MainComponent() override
     {
+        // Windows opened from here (audio settings, channels, headphone correction ...) refer to
+        // this component: close them, e.g. when another save state replaces it.
+        for (auto& d : dialogs)
+            if (d != nullptr)
+                delete d.getComponent();
         volumeTimer.stopTimer();
         pluginScan.reset(); // stops the scan (and ends a running scan process)
-        saveState();
-        settings->setValue ("startupPending", false);
-        settings->saveIfNeeded();
+        cache.setValue ("startupPending", false);
+        cache.saveIfNeeded();
         deviceManager.removeChangeListener (this);
         receiver.removeListener (this);
         receiver.disconnect();
@@ -1447,10 +1419,14 @@ public:
         deviceManager.removeAudioCallback (&engine);
     }
 
-    void saveState()
+    //==============================================================================
+    // Save states. Nothing is saved automatically; "Save" writes everything into the save state.
+
+    // Puts the audio device and the plugin's state into the settings.
+    void captureState()
     {
         // Only store the audio device once it has been opened (on the Mac that waits for the
-        // microphone permission), so an early quit doesn't overwrite the saved device.
+        // microphone permission), and not the fallback device of a safe start.
         if (audioInitialised && (! safeMode || audioSettingsOpened))
             if (auto xml = deviceManager.createStateXml())
                 settings->setValue ("audioDevice", xml.get());
@@ -1460,7 +1436,284 @@ public:
             plugin->getStateInformation (state);
             settings->setValue (pluginKey ("state"), state.toBase64Encoding());
         }
-        settings->saveIfNeeded();
+    }
+
+    String settingsText() const
+    {
+        return settings->createXml ("s")->toString (XmlElement::TextFormat().singleLine().withoutHeader());
+    }
+
+    String audioStateText()
+    {
+        if (! audioInitialised || (safeMode && ! audioSettingsOpened))
+            return {};
+        auto xml = deviceManager.createStateXml();
+        return xml != nullptr ? xml->toString (XmlElement::TextFormat().singleLine().withoutHeader()) : String();
+    }
+
+    void markStateSaved()
+    {
+        savedSettings = settingsText();
+        audioBaseline = audioStateText();
+        pluginTouched = false;
+    }
+
+    bool hasUnsavedChanges()
+    {
+        return pluginTouched || settingsText() != savedSettings || audioStateText() != audioBaseline;
+    }
+
+    String stateName() const
+    {
+        return currentStateFile != File() ? currentStateFile.getFileNameWithoutExtension() : String();
+    }
+
+    void updateStateDisplay()
+    {
+        const bool dirty = hasUnsavedChanges();
+        const auto name = stateName();
+        const auto text = (name.isNotEmpty() ? name : String ("No save state")) + (dirty ? " *" : "");
+        if (stateBox.getText() != text)
+            stateBox.setText (text, dontSendNotification);
+        stateBox.setColour (ComboBox::textColourId, name.isNotEmpty() ? ui::label : ui::secondary);
+        if (auto* window = dynamic_cast<DocumentWindow*> (getTopLevelComponent()))
+        {
+            const auto title = String ("Head Tracking Host - ") + (name.isNotEmpty() ? name : String ("No save state"))
+                             + (dirty ? " *" : "");
+            if (window->getName() != title)
+                window->setName (title);
+        }
+    }
+
+    void refreshStateList()
+    {
+        stateList = states::list();
+        stateBox.clear (dontSendNotification);
+        for (int i = 0; i < (int) stateList.size(); ++i)
+            stateBox.addItem (stateList[(size_t) i].name + (stateList[(size_t) i].isDefault ? "  (default)" : ""), i + 1);
+        if (stateList.empty())
+            stateBox.addItem ("(no save states yet - click Save)", noStatesId);
+        stateBox.setItemEnabled (noStatesId, false);
+        stateBox.setText ({}, dontSendNotification); // forces updateStateDisplay to set the text
+        updateStateDisplay();
+    }
+
+    // Asks what to do with unsaved changes, then calls next (unless the user cancels).
+    void confirmUnsaved (const String& action, std::function<void()> next)
+    {
+        if (! hasUnsavedChanges())
+            return next();
+        const auto name = stateName();
+        const auto message = name.isNotEmpty() ? "The save state \"" + name + "\" has changes that are not saved."
+                                               : String ("The current settings are not saved in a save state.");
+        AlertWindow::showAsync (MessageBoxOptions::makeOptionsYesNoCancel (MessageBoxIconType::QuestionIcon,
+                                                                           "Save changes before " + action + "?", message,
+                                                                           "Save", "Don't save", "Cancel", this),
+                                [safe = Component::SafePointer<MainComponent> (this), next] (int result)
+                                {
+                                    if (safe == nullptr || result == 0)
+                                        return;
+                                    if (result == 1)
+                                        safe->saveCurrentState (next);
+                                    else
+                                        next();
+                                });
+    }
+
+    // Writes everything into the save state in use (none yet: asks for a name first).
+    void saveCurrentState (std::function<void()> then = {})
+    {
+        if (currentStateFile == File())
+            return saveAsNewState (then);
+        if (writeState (currentStateFile, states::isDefault (currentStateFile)) && then)
+            then();
+    }
+
+    bool writeState (const File& file, bool isDefault)
+    {
+        captureState();
+        if (! states::write (file, *settings, isDefault))
+        {
+            AlertWindow::showAsync (MessageBoxOptions::makeOptionsOk (MessageBoxIconType::WarningIcon, "Could not save",
+                                                                      "Could not write " + file.getFullPathName(), "OK", this),
+                                    nullptr);
+            return false;
+        }
+        currentStateFile = file;
+        markStateSaved();
+        refreshStateList();
+        return true;
+    }
+
+    // Asks for a save state name.
+    void askStateName (const String& title, const String& suggestion, std::function<void (const String&)> done)
+    {
+        auto* w = new AlertWindow (title, "Name of the save state, e.g. \"Bose with head tracking\":",
+                                   MessageBoxIconType::NoIcon, this);
+        w->addTextEditor ("name", suggestion);
+        w->addButton ("OK", 1, KeyPress (KeyPress::returnKey));
+        w->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
+        w->enterModalState (true, ModalCallbackFunction::create ([w, done] (int result)
+        {
+            const auto name = File::createLegalFileName (w->getTextEditorContents ("name").trim());
+            if (result == 1 && name.isNotEmpty())
+                done (name);
+        }), true);
+    }
+
+    void saveAsNewState (std::function<void()> then = {})
+    {
+        askStateName ("Save as new save state", stateName().isNotEmpty() ? stateName() + " copy" : String ("Default"),
+                      [safe = Component::SafePointer<MainComponent> (this), then] (const String& name)
+                      {
+                          if (safe == nullptr)
+                              return;
+                          const auto file = states::fileFor (name);
+                          auto write = [safe, file, then]
+                          {
+                              if (safe == nullptr)
+                                  return;
+                              // The first save state becomes the default, so the next start uses it.
+                              const bool makeDefault = states::isDefault (file) || states::defaultFile() == File();
+                              if (safe->writeState (file, makeDefault) && then)
+                                  then();
+                          };
+                          if (! file.existsAsFile())
+                              return write();
+                          AlertWindow::showAsync (MessageBoxOptions::makeOptionsOkCancel (MessageBoxIconType::QuestionIcon,
+                                                      "Replace \"" + name + "\"?", "A save state with this name already exists.",
+                                                      "Replace", "Cancel", safe.getComponent()),
+                                                  [write] (int r) { if (r == 1) write(); });
+                      });
+    }
+
+    void loadState (const File& file)
+    {
+        confirmUnsaved ("loading another save state", [safe = Component::SafePointer<MainComponent> (this), file]
+        {
+            if (safe == nullptr || safe->onLoadState == nullptr)
+                return;
+            if (file == File())
+                return safe->onLoadState (std::make_unique<PropertySet>(), {}); // standard settings
+            if (auto state = states::read (file))
+                return safe->onLoadState (std::move (state), file);
+            AlertWindow::showAsync (MessageBoxOptions::makeOptionsOk (MessageBoxIconType::WarningIcon, "Could not load",
+                                                                      file.getFullPathName() + " is not a save state.", "OK",
+                                                                      safe.getComponent()),
+                                    nullptr);
+            safe->refreshStateList();
+        });
+    }
+
+    void stateBoxChanged()
+    {
+        const int index = stateBox.getSelectedId() - 1;
+        if (! isPositiveAndBelow (index, (int) stateList.size()))
+            return;
+        const auto file = stateList[(size_t) index].file;
+        stateBox.setText ({}, dontSendNotification);
+        updateStateDisplay(); // shows the current one until the other one is loaded
+        if (file != currentStateFile || hasUnsavedChanges())
+            loadState (file);
+    }
+
+    void showStateMenu()
+    {
+        const bool hasFile = currentStateFile.existsAsFile();
+        const bool isDefault = hasFile && states::isDefault (currentStateFile);
+        PopupMenu menu;
+        menu.addItem (1, "Save as new...");
+        menu.addItem (2, "Rename...", hasFile);
+        menu.addItem (3, isDefault ? "Default at start: yes (click to remove)" : "Use as default at start", hasFile);
+        menu.addItem (4, "Delete...", hasFile);
+        menu.addSeparator();
+        menu.addItem (5, "Reload (discard changes)", hasFile);
+        menu.addItem (6, "New with standard settings");
+        menu.addSeparator();
+        menu.addItem (7, "Open save state folder (for backups)");
+        menu.showMenuAsync (PopupMenu::Options().withTargetComponent (&stateMenuButton),
+                            [safe = Component::SafePointer<MainComponent> (this), isDefault] (int result)
+                            {
+                                if (safe == nullptr)
+                                    return;
+                                auto& self = *safe;
+                                switch (result)
+                                {
+                                    case 1: self.saveAsNewState(); break;
+                                    case 2: self.renameState(); break;
+                                    case 3: states::setDefault (isDefault ? File() : self.currentStateFile); self.refreshStateList(); break;
+                                    case 4: self.deleteState(); break;
+                                    case 5: if (self.onLoadState != nullptr)
+                                                if (auto s = states::read (self.currentStateFile))
+                                                    self.onLoadState (std::move (s), self.currentStateFile);
+                                            break;
+                                    case 6: self.loadState ({}); break;
+                                    case 7: states::folder().createDirectory(); states::folder().startAsProcess(); break;
+                                    default: break;
+                                }
+                            });
+    }
+
+    void renameState()
+    {
+        askStateName ("Rename save state", stateName(), [safe = Component::SafePointer<MainComponent> (this)] (const String& name)
+        {
+            if (safe == nullptr)
+                return;
+            const auto target = states::fileFor (name);
+            if (target == safe->currentStateFile)
+                return;
+            if (target.existsAsFile())
+            {
+                AlertWindow::showAsync (MessageBoxOptions::makeOptionsOk (MessageBoxIconType::WarningIcon, "Name in use",
+                                                                          "A save state named \"" + name + "\" already exists.",
+                                                                          "OK", safe.getComponent()),
+                                        nullptr);
+                return;
+            }
+            if (safe->currentStateFile.moveFileTo (target))
+                safe->currentStateFile = target;
+            safe->refreshStateList();
+        });
+    }
+
+    void deleteState()
+    {
+        const auto file = currentStateFile;
+        AlertWindow::showAsync (MessageBoxOptions::makeOptionsOkCancel (MessageBoxIconType::WarningIcon,
+                                    "Delete \"" + stateName() + "\"?",
+                                    "The file is moved to the trash. The current settings stay as they are, but are no "
+                                    "longer saved in a save state.",
+                                    "Delete", "Cancel", this),
+                                [safe = Component::SafePointer<MainComponent> (this), file] (int r)
+                                {
+                                    if (safe == nullptr || r != 1)
+                                        return;
+                                    if (! file.moveToTrash())
+                                        file.deleteFile();
+                                    safe->currentStateFile = File();
+                                    safe->refreshStateList();
+                                });
+    }
+
+    // Quitting: asks about unsaved changes first.
+    void requestQuit (std::function<void()> quit) { confirmUnsaved ("quitting", std::move (quit)); }
+
+    // Changes made in the plugin itself (not the head tracking axes) count as unsaved changes.
+    void audioProcessorParameterChanged (AudioProcessor*, int index, float) override
+    {
+        for (auto& a : params)
+            if (a.param != nullptr && a.param->getParameterIndex() == index)
+                return;
+        if (Time::getMillisecondCounter() - pluginLoadedTime > 2000)
+            pluginTouched = true;
+    }
+
+    void audioProcessorChanged (AudioProcessor*, const ChangeDetails& details) override
+    {
+        if ((details.programChanged || details.nonParameterStateChanged)
+            && Time::getMillisecondCounter() - pluginLoadedTime > 2000)
+            pluginTouched = true;
     }
 
     void paint (Graphics& g) override
@@ -1531,6 +1784,16 @@ public:
         };
         auto switchArea = [] (Rectangle<int> r) { return r.removeFromRight (44); };
 
+        beginGroup ("SAVE STATE");
+        stateBox.setBounds (row (""));
+        {
+            auto r = row ("");
+            stateSaveButton.setBounds (r.removeFromLeft (r.getWidth() / 2 - 3));
+            r.removeFromLeft (6);
+            stateMenuButton.setBounds (r);
+        }
+        endGroup();
+
         beginGroup ("PLUGIN");
         pluginBox.setBounds (row (""));
         {
@@ -1547,8 +1810,7 @@ public:
         endGroup();
 
        #if JUCE_WINDOWS
-        // Own group: unlike the plugin settings, this switch is the same for every plugin.
-        beginGroup ("GLOBAL (ALL PLUGINS)");
+        beginGroup ("FLEXASIO");
         startSoundButton.setBounds (switchArea (row ("FlexASIO start sound", 200)));
         endGroup();
        #endif
@@ -1580,7 +1842,7 @@ public:
             auto r = row ("");
             autoEqSearchButton.setBounds (r.removeFromRight (64));
             r.removeFromRight (6);
-            autoEqSlotBox.setBounds (r);
+            autoEqNameLabel.setBounds (r);
         }
         endGroup();
 
@@ -1650,12 +1912,39 @@ private:
 
     //==============================================================================
     // Plugin selection
-    String pluginKey (const String& name) const
+    // Settings that belong to the loaded plugin (its state, yaw/pitch/roll parameters, zoom). A save
+    // state holds them for its one plugin; choosing another plugin starts it with its defaults.
+    static String pluginKey (const String& name) { return "plugin." + name; }
+
+    void forgetPluginSettings()
     {
-        // Plugins from a shell file (e.g. Waves' WaveShell) are stored under their own name.
-        const auto sub = settings->getValue ("pluginName");
-        const auto id = sub.isNotEmpty() ? sub : File (settings->getValue ("pluginPath")).getFileNameWithoutExtension();
-        return "plugin." + id.removeCharacters (" .") + "." + name;
+        for (auto& key : settings->getAllProperties().getAllKeys())
+            if (key.startsWith ("plugin."))
+                settings->removeValue (key);
+    }
+
+    // The user picks another plugin: ask about unsaved changes, then load it with its defaults.
+    void switchPlugin (const File& file, const String& name)
+    {
+        confirmUnsaved ("changing the plugin", [safe = Component::SafePointer<MainComponent> (this), file, name]
+        {
+            if (safe == nullptr)
+                return;
+            safe->forgetPluginSettings();
+            if (file == File())
+            {
+                safe->unloadPlugin();
+                safe->settings->setValue ("pluginPath", String());
+                safe->settings->setValue ("pluginName", String());
+                safe->lastError = {};
+                safe->deviceManager.addAudioCallback (&safe->engine);
+                safe->engine.setMuted (safe->feedbackRisk);
+                safe->updateSize();
+                return;
+            }
+            safe->loadPlugin (file, name);
+        });
+        refreshPluginList(); // shows the current plugin until the new one is loaded
     }
 
     // One entry of the plugin list. A file can hold several plugins (a "shell", e.g. Waves'
@@ -1680,15 +1969,15 @@ private:
 
     void loadPluginCache()
     {
-        if (auto xml = settings->getXmlValue ("knownPlugins"))
+        if (auto xml = cache.getXmlValue ("knownPlugins"))
             knownPlugins.recreateFromXml (*xml);
     }
 
     void savePluginCache()
     {
         if (auto xml = knownPlugins.createXml())
-            settings->setValue ("knownPlugins", xml.get());
-        settings->saveIfNeeded();
+            cache.setValue ("knownPlugins", xml.get());
+        cache.saveIfNeeded();
     }
 
     // Scans the plugin folders like a DAW: every new or changed file is opened once (in its own
@@ -1739,7 +2028,7 @@ private:
         pluginScan->onFinished = [this, safeThis]
         {
             scanningPluginName = {};
-            settings->setValue ("pluginsScanned", true);
+            cache.setValue ("pluginsScanned", true);
             savePluginCache();
             refreshPluginList (true);
             MessageManager::callAsync ([safeThis] { if (safeThis != nullptr) safeThis->pluginScan.reset(); });
@@ -1810,25 +2099,13 @@ private:
             return;
         }
         if (id == 1)
-        {
-            // No plugin: dry signal, e.g. headphone correction only.
-            if (plugin != nullptr)
-                saveState();
-            unloadPlugin();
-            settings->setValue ("pluginPath", String());
-            settings->setValue ("pluginName", String());
-            lastError = {};
-            deviceManager.addAudioCallback (&engine);
-            engine.setMuted (feedbackRisk);
-            updateSize();
-            return;
-        }
+            return switchPlugin ({}, {}); // no plugin: dry signal, e.g. headphone correction only
         const int index = id - 2;
         if (isPositiveAndBelow (index, (int) installedPlugins.size()))
         {
             // Copy: loading rebuilds the list.
             const auto entry = installedPlugins[(size_t) index];
-            loadPlugin (entry.file, entry.name);
+            switchPlugin (entry.file, entry.name);
         }
     }
 
@@ -1867,7 +2144,7 @@ private:
                               {
                                   auto f = fc.getResult();
                                   if (f.exists())
-                                      loadPlugin (f);
+                                      switchPlugin (f, {});
                               });
     }
 
@@ -1885,6 +2162,8 @@ private:
             pluginHolder.removeChildComponent (editor.get());
             editor.reset();
         }
+        if (plugin != nullptr)
+            plugin->removeListener (this);
         plugin.reset();
         params = {};
         for (auto& box : axisBoxes)
@@ -1896,9 +2175,8 @@ private:
     // without a name the user is asked which one to load.
     void loadPlugin (const File file, const String name = {})
     {
-        if (plugin != nullptr)
-            saveState();
         unloadPlugin();
+        pluginLoadedTime = Time::getMillisecondCounter(); // changes while loading don't count as edits
 
         // Use the scan results if the file was scanned, otherwise open it now and remember it.
         OwnedArray<PluginDescription> types;
@@ -1955,7 +2233,10 @@ private:
         plugin = formatManager.createPluginInstance (*type, sr, bs, error);
 
         if (plugin != nullptr)
+        {
             pluginDefaultLayout = plugin->getBusesLayout();
+            plugin->addListener (this);
+        }
         if (plugin == nullptr)
         {
             lastError = "Could not load " + file.getFileName() + ": " + error;
@@ -2513,8 +2794,8 @@ private:
         if (! startupCleared && now - audioStartTime > 8000)
         {
             startupCleared = true;
-            settings->setValue ("startupPending", false);
-            settings->saveIfNeeded();
+            cache.setValue ("startupPending", false);
+            cache.saveIfNeeded();
         }
 
         const bool error   = engine.takeDeviceError();
@@ -2572,6 +2853,7 @@ private:
     void timerCallback() override
     {
         audioWatchdog();
+        updateStateDisplay();
         const auto now = Time::getMillisecondCounter();
         const int rate = (int) (angleMessages - lastCountedAngles) * 2;
         lastCountedAngles = angleMessages;
@@ -2833,72 +3115,50 @@ private:
         o.escapeKeyTriggersCloseButton = true;
         o.useNativeTitleBar = true;
         o.resizable = true;
-        o.launchAsync();
+        dialogs.add (o.launchAsync());
     }
 
     //==============================================================================
-    // AutoEQ: three offline slots, filled from the AutoEq database (needs internet only to search).
-    String slotKey (int slot, const char* what) const { return "autoeqSlot" + String (slot + 1) + "." + what; }
-
-    void refreshAutoEqSlots()
-    {
-        const int selected = autoEqSlotBox.getSelectedItemIndex();
-        autoEqSlotBox.clear (dontSendNotification);
-        for (int i = 0; i < numEqSlots; ++i)
-        {
-            const auto name = settings->getValue (slotKey (i, "name"));
-            autoEqSlotBox.addItem ("Slot " + String (i + 1) + ": " + (name.isNotEmpty() ? name : String ("(empty)")), i + 1);
-        }
-        autoEqSlotBox.setSelectedItemIndex (jmax (0, selected), dontSendNotification);
-    }
+    // AutoEQ: one headphone correction per save state, filled from the AutoEq database (needs
+    // internet only to search) or from a file.
+    String eqName() const        { return settings->getValue ("eq.name"); }
+    EqProfile eqProfile() const  { return parseAutoEq (settings->getValue ("eq.text")); }
 
     void applyAutoEq()
     {
-        const int slot = jmax (0, autoEqSlotBox.getSelectedItemIndex());
-        const auto profile = parseAutoEq (settings->getValue (slotKey (slot, "text")));
+        const auto profile = eqProfile();
         engine.getHeadphoneEq().setProfile (profile, autoEqButton.getToggleState());
-        autoEqSlotBox.setTooltip (profile.isEmpty() ? "Empty slot - click \"Headphone correction...\" to fill it."
-                                                    : String ((int) profile.bands.size()) + " filters, preamp "
-                                                          + String (profile.preampDb, 1) + " dB");
+        autoEqNameLabel.setText (profile.isEmpty() ? String ("(none chosen)") : eqName(), dontSendNotification);
+        autoEqNameLabel.setColour (Label::textColourId, profile.isEmpty() ? ui::secondary : ui::label);
+        autoEqNameLabel.setTooltip (profile.isEmpty() ? "No headphone correction chosen - click \"Edit...\"."
+                                                      : eqName() + ": " + String ((int) profile.bands.size())
+                                                            + " filters, preamp " + String (profile.preampDb, 1) + " dB");
     }
 
-    void storeAutoEqSlot (int slot, const String& name, const String& text)
+    void storeEq (const String& name, const String& text)
     {
-        settings->setValue (slotKey (slot, "name"), name);
-        settings->setValue (slotKey (slot, "text"), text);
-        settings->saveIfNeeded();
-        refreshAutoEqSlots();
-        autoEqSlotBox.setSelectedItemIndex (slot, sendNotification);
+        settings->setValue ("eq.name", name);
+        settings->setValue ("eq.text", text);
         applyAutoEq();
         notifyHeadphoneWindow();
     }
 
-    void clearAutoEqSlot (int slot)
+    void clearEq()
     {
-        settings->removeValue (slotKey (slot, "name"));
-        settings->removeValue (slotKey (slot, "text"));
-        settings->saveIfNeeded();
-        refreshAutoEqSlots();
+        settings->removeValue ("eq.name");
+        settings->removeValue ("eq.text");
         applyAutoEq();
         notifyHeadphoneWindow();
     }
 
-    int activeSlot() const { return jmax (0, autoEqSlotBox.getSelectedItemIndex()); }
-    String slotName (int slot) const { return settings->getValue (slotKey (slot, "name")); }
-    EqProfile slotProfile (int slot) const { return parseAutoEq (settings->getValue (slotKey (slot, "text"))); }
-
-    // Window with the three slots, the curve, database search and file import.
+    // Window with the correction's name, the curve, database search and file import.
     class HeadphoneWindow : public Component
     {
     public:
         explicit HeadphoneWindow (MainComponent& o) : owner (o)
         {
-            addAndMakeVisible (slotBox);
-            slotBox.onChange = [this]
-            {
-                owner.autoEqSlotBox.setSelectedItemIndex (slotBox.getSelectedItemIndex(), sendNotification);
-                refresh();
-            };
+            addAndMakeVisible (nameLabel);
+            nameLabel.setFont (FontOptions (15.0f, Font::bold));
             addAndMakeVisible (curve);
             addAndMakeVisible (info);
             info.setColour (Label::textColourId, Colours::lightgrey);
@@ -2906,7 +3166,7 @@ private:
                 addAndMakeVisible (b);
             findButton.onClick   = [this] { owner.showAutoEqSearch(); };
             importButton.onClick = [this] { importFile(); };
-            clearButton.onClick  = [this] { owner.clearAutoEqSlot (slotBox.getSelectedItemIndex()); };
+            clearButton.onClick  = [this] { owner.clearEq(); };
             addAndMakeVisible (hint);
             hint.setColour (Label::textColourId, Colours::grey);
             hint.setText ("Import: AutoEq \"ParametricEQ.txt\" (from autoeq.app or GitHub, same format as Equalizer APO).",
@@ -2917,17 +3177,12 @@ private:
 
         void refresh()
         {
-            slotBox.clear (dontSendNotification);
-            for (int i = 0; i < numEqSlots; ++i)
-            {
-                const auto name = owner.slotName (i);
-                slotBox.addItem ("Slot " + String (i + 1) + ": " + (name.isNotEmpty() ? name : String ("(empty)")), i + 1);
-            }
-            const int slot = owner.activeSlot();
-            slotBox.setSelectedItemIndex (slot, dontSendNotification);
-            const auto profile = owner.slotProfile (slot);
+            const auto profile = owner.eqProfile();
+            nameLabel.setText (profile.isEmpty() ? String ("No headphone correction chosen") : owner.eqName(),
+                               dontSendNotification);
             curve.setProfile (profile);
-            info.setText (profile.bands.empty() ? String ("This slot is empty - find your headphones or import a file.")
+            info.setText (profile.bands.empty() ? String ("Find your headphones in the database or import a file. "
+                                                          "Saved with the save state.")
                                                 : String ((int) profile.bands.size()) + " filters, preamp "
                                                       + String (profile.preampDb, 1) + " dB (keeps the level safe)",
                           dontSendNotification);
@@ -2936,7 +3191,7 @@ private:
         void resized() override
         {
             auto r = getLocalBounds().reduced (12);
-            slotBox.setBounds (r.removeFromTop (28));
+            nameLabel.setBounds (r.removeFromTop (28));
             r.removeFromTop (10);
             auto buttons = r.removeFromBottom (28);
             findButton.setBounds (buttons.removeFromLeft (200));
@@ -2955,10 +3210,9 @@ private:
         {
             chooser = std::make_unique<FileChooser> ("Import an AutoEq ParametricEQ.txt",
                                                      File::getSpecialLocation (File::userHomeDirectory), "*.txt");
-            const int slot = slotBox.getSelectedItemIndex();
             Component::SafePointer<HeadphoneWindow> safe (this);
             chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
-                                  [safe, slot] (const FileChooser& fc)
+                                  [safe] (const FileChooser& fc)
                                   {
                                       const auto file = fc.getResult();
                                       if (safe == nullptr || ! file.existsAsFile())
@@ -2972,15 +3226,15 @@ private:
                                       }
                                       auto name = file.getFileNameWithoutExtension();
                                       name = name.endsWithIgnoreCase (" ParametricEQ") ? name.dropLastCharacters (13) : name;
-                                      safe->owner.storeAutoEqSlot (slot, name + " (imported)", text);
+                                      safe->owner.storeEq (name + " (imported)", text);
                                   });
         }
 
         MainComponent& owner;
-        ComboBox slotBox;
+        Label nameLabel;
         EqCurve curve;
         Label info, hint;
-        TextButton findButton { "Find in database..." }, importButton { "Import file..." }, clearButton { "Clear slot" };
+        TextButton findButton { "Find in database..." }, importButton { "Import file..." }, clearButton { "Remove" };
         std::unique_ptr<FileChooser> chooser;
     };
 
@@ -3003,13 +3257,14 @@ private:
         o.escapeKeyTriggersCloseButton = true;
         o.useNativeTitleBar = true;
         o.resizable = true;
-        o.launchAsync();
+        dialogs.add (o.launchAsync());
     }
 
-    File autoEqIndexCache (bool all) const
+    // The downloaded headphone lists, kept for this session only (no file).
+    static String& autoEqIndexCache (bool all)
     {
-        return settings->getFile().getSiblingFile (all ? "Head Tracking Host AutoEq index.md"
-                                                        : "Head Tracking Host AutoEq recommended.md");
+        static String recommended, index;
+        return all ? index : recommended;
     }
 
     struct AutoEqEntry { String name, source, path; };
@@ -3066,15 +3321,9 @@ private:
             list.setRowHeight (24);
             addAndMakeVisible (status);
             status.setColour (Label::textColourId, Colours::lightgrey);
-            addAndMakeVisible (saveLabel);
-            saveLabel.setText ("Save to slot:", dontSendNotification);
-            for (int i = 0; i < numEqSlots; ++i)
-            {
-                auto* b = saveButtons.add (new TextButton (String (i + 1)));
-                b->setTooltip ("Save the selected headphone to slot " + String (i + 1));
-                b->onClick = [this, i] { saveTo (i); };
-                addAndMakeVisible (b);
-            }
+            addAndMakeVisible (useButton);
+            useButton.setTooltip ("Use the selected headphone's correction (saved with the save state).");
+            useButton.onClick = [this] { useSelected(); };
             addAndMakeVisible (refreshButton);
             refreshButton.onClick = [this] { loadIndex (true); };
             addAndMakeVisible (showAllButton);
@@ -3093,12 +3342,7 @@ private:
             showAllButton.setBounds (r.removeFromTop (24).withWidth (240));
             r.removeFromTop (4);
             auto bottom = r.removeFromBottom (28);
-            saveLabel.setBounds (bottom.removeFromLeft (92));
-            for (auto* b : saveButtons)
-            {
-                b->setBounds (bottom.removeFromLeft (44));
-                bottom.removeFromLeft (6);
-            }
+            useButton.setBounds (bottom.removeFromLeft (220));
             refreshButton.setBounds (bottom.removeFromRight (110));
             r.removeFromBottom (6);
             status.setBounds (r.removeFromBottom (22));
@@ -3125,19 +3369,18 @@ private:
         void loadIndex (bool forceDownload)
         {
             const bool all = showAllButton.getToggleState();
-            const auto cache = owner.autoEqIndexCache (all);
-            if (! forceDownload && cache.existsAsFile())
+            if (! forceDownload && autoEqIndexCache (all).isNotEmpty())
             {
-                setEntries (parseAutoEqIndex (cache.loadFileAsString()), "List from cache.");
+                setEntries (parseAutoEqIndex (autoEqIndexCache (all)), "List loaded.");
                 return;
             }
             status.setText ("Downloading headphone list...", dontSendNotification);
             Component::SafePointer<AutoEqSearch> safe (this);
             const auto file = String (all ? "INDEX.md" : "README.md");
-            Thread::launch ([safe, cache, file]
+            Thread::launch ([safe, all, file]
             {
                 const auto text = downloadText (autoEqBase + file);
-                MessageManager::callAsync ([safe, cache, text]
+                MessageManager::callAsync ([safe, all, text]
                 {
                     if (safe == nullptr)
                         return;
@@ -3147,7 +3390,7 @@ private:
                         safe->status.setText ("Could not download the list - check your internet connection.", dontSendNotification);
                         return;
                     }
-                    cache.replaceWithText (text);
+                    autoEqIndexCache (all) = text;
                     safe->setEntries (std::move (parsed), "List downloaded.");
                 });
             });
@@ -3179,7 +3422,7 @@ private:
             list.repaint();
         }
 
-        void saveTo (int slot)
+        void useSelected()
         {
             const int row = list.getSelectedRow();
             if (! isPositiveAndBelow (row, (int) shown.size()))
@@ -3193,10 +3436,10 @@ private:
             const auto name = e.name + " (" + e.source.upToFirstOccurrenceOf (" on ", false, false) + ")";
             status.setText ("Downloading " + e.name + "...", dontSendNotification);
             Component::SafePointer<AutoEqSearch> safe (this);
-            Thread::launch ([safe, url, name, slot]
+            Thread::launch ([safe, url, name]
             {
                 const auto text = downloadText (url);
-                MessageManager::callAsync ([safe, text, name, slot]
+                MessageManager::callAsync ([safe, text, name]
                 {
                     if (safe == nullptr)
                         return;
@@ -3205,8 +3448,8 @@ private:
                         safe->status.setText ("Could not download this profile.", dontSendNotification);
                         return;
                     }
-                    safe->owner.storeAutoEqSlot (slot, name, text);
-                    safe->status.setText ("Saved to slot " + String (slot + 1) + ": " + name, dontSendNotification);
+                    safe->owner.storeEq (name, text);
+                    safe->status.setText ("In use: " + name, dontSendNotification);
                 });
             });
         }
@@ -3215,10 +3458,9 @@ private:
         TextEditor searchBox;
         ListBox list;
         Label status;
-        OwnedArray<TextButton> saveButtons;
+        TextButton useButton { "Use selected headphone" };
         TextButton refreshButton { "Refresh list" };
         ToggleButton showAllButton;
-        Label saveLabel;
         std::vector<AutoEqEntry> entries;
         std::vector<int> shown;
     };
@@ -3232,7 +3474,7 @@ private:
         o.escapeKeyTriggersCloseButton = true;
         o.useNativeTitleBar = true;
         o.resizable = true;
-        o.launchAsync();
+        dialogs.add (o.launchAsync());
     }
 
     // Version, license, source link and the license texts of the third-party code in the program.
@@ -3315,7 +3557,7 @@ private:
         o.escapeKeyTriggersCloseButton = true;
         o.useNativeTitleBar = true;
         o.resizable = true;
-        o.launchAsync();
+        dialogs.add (o.launchAsync());
     }
 
     void showAudioSettings()
@@ -3330,7 +3572,7 @@ private:
         o.escapeKeyTriggersCloseButton = true;
         o.useNativeTitleBar = true;
         o.resizable = true;
-        o.launchAsync();
+        dialogs.add (o.launchAsync());
     }
 
     //==============================================================================
@@ -3344,7 +3586,16 @@ private:
         }
     };
 
-    std::unique_ptr<PropertiesFile> settings;
+    Array<Component::SafePointer<DialogWindow>> dialogs;
+    PropertiesFile& cache;                    // plugin list and crash guard, no settings
+    std::unique_ptr<PropertySet> settings;    // everything a save state holds
+    File currentStateFile;                    // none: not saved in a save state
+    std::vector<states::Info> stateList;
+    String savedSettings, audioBaseline;      // as last saved/loaded, for the * marker
+    std::atomic<bool> pluginTouched { false };
+    static constexpr int noStatesId = 9999;
+    ComboBox stateBox;
+    TextButton stateSaveButton { "Save" }, stateMenuButton { "More..." };
     HostDeviceManager deviceManager;
     AudioPluginFormatManager formatManager;
     HostEngine engine;
@@ -3389,7 +3640,8 @@ private:
     int currentPort = 0;
     bool oscConnected = false;
     uint64 messagesReceived = 0, lastCountedMessages = 0, angleMessages = 0, lastCountedAngles = 0;
-    uint32 lastAngleTime = 0, pluginLoadedTime = 0;
+    uint32 lastAngleTime = 0;
+    std::atomic<uint32> pluginLoadedTime { 0 };  // also read by the plugin listener (any thread)
 
     Dot statusDot;
     Label statusLabel, detailLabel;
@@ -3399,7 +3651,7 @@ private:
     ToggleButton speakerSimButton;
     Label routingLabel;
     ToggleButton trackingButton, autoEqButton;
-    ComboBox autoEqSlotBox;
+    Label autoEqNameLabel;
     TextButton autoEqSearchButton { "Edit..." };
     SidebarContent sidebar;
     Viewport sidebarViewport;
@@ -3498,25 +3750,41 @@ public:
             return;
         }
         LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
-        mainWindow = std::make_unique<MainWindow> (getApplicationName());
+        cache = states::openCache();
+        states::migrateOldSettings (*cache);   // settings of version 2.1 and older -> save state "Default"
+
+        // Start with the default save state; without one, with the standard settings.
+        auto stateFile = states::defaultFile();
+        auto state = stateFile != File() ? states::read (stateFile) : nullptr;
+        if (state == nullptr)
+            stateFile = File(); // unreadable: standard settings, not saved in a save state
+        mainWindow = std::make_unique<MainWindow> (getApplicationName(), *cache, std::move (state), stateFile);
     }
 
     void shutdown() override
     {
         mainWindow.reset();
+        cache.reset();
         LookAndFeel::setDefaultLookAndFeel (nullptr);
     }
 
-    void systemRequestedQuit() override { quit(); }
+    // Asks about unsaved changes first (window close button, Cmd+Q, Alt+F4).
+    void systemRequestedQuit() override
+    {
+        if (mainWindow == nullptr)
+            return quit();
+        mainWindow->requestQuit ([] { JUCEApplication::getInstance()->quit(); });
+    }
 
     class MainWindow : public DocumentWindow
     {
     public:
-        explicit MainWindow (const String& name)
-            : DocumentWindow (name, Colours::black, DocumentWindow::allButtons) // minimise, maximise/zoom, close
+        MainWindow (const String& name, PropertiesFile& cacheFile, std::unique_ptr<PropertySet> state, const File& stateFile)
+            : DocumentWindow (name, Colours::black, DocumentWindow::allButtons), // minimise, maximise/zoom, close
+              cache (cacheFile)
         {
             setUsingNativeTitleBar (true);
-            setContentOwned (new MainComponent(), true); // grows to fit the plugin when it is loaded
+            setContentOwned (createContent (std::move (state), stateFile, true), true); // grows to fit the plugin
             setResizable (true, false);
             setResizeLimits (720, 480, 20000, 20000);
             centreWithSize (getWidth(), getHeight());
@@ -3528,10 +3796,42 @@ public:
         }
 
         void closeButtonPressed() override { JUCEApplication::getInstance()->systemRequestedQuit(); }
+
+        void requestQuit (std::function<void()> quit)
+        {
+            if (auto* content = dynamic_cast<MainComponent*> (getContentComponent()))
+                content->requestQuit (std::move (quit));
+            else
+                quit();
+        }
+
+    private:
+        MainComponent* createContent (std::unique_ptr<PropertySet> state, const File& stateFile, bool appStart)
+        {
+            auto* content = new MainComponent (cache, std::move (state), stateFile, appStart);
+            content->onLoadState = [this] (std::unique_ptr<PropertySet> s, const File& f)
+            {
+                // Replace the content after the current call has returned: the old one (audio device,
+                // plugin) is closed completely before the new one opens the save state's device.
+                auto shared = std::make_shared<std::unique_ptr<PropertySet>> (std::move (s));
+                Component::SafePointer<MainWindow> safe (this);
+                MessageManager::callAsync ([safe, shared, f]
+                {
+                    if (safe == nullptr)
+                        return;
+                    safe->clearContentComponent();
+                    safe->setContentOwned (safe->createContent (std::move (*shared), f, false), false);
+                });
+            };
+            return content;
+        }
+
+        PropertiesFile& cache;
     };
 
 private:
     HostLookAndFeel lookAndFeel;
+    std::unique_ptr<PropertiesFile> cache;
     std::unique_ptr<MainWindow> mainWindow;
 };
 

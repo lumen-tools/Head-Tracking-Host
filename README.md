@@ -26,7 +26,9 @@ Games / music / video (7.1)
   clicks after a few minutes of playback.
 - **Volume keys work:** the system volume (keys, slider) controls your headphones.
 - **Up to 7.1.4 input**, free channel routing and a one-click fix for swapped Windows surrounds.
-- **Portable:** a single EXE (Windows) or app (Mac); settings are stored next to it.
+- **Save states:** keep complete setups as single files – e.g. per headphone, with or without head
+  tracking – and pick one as the default that every start uses.
+- **Portable:** a single EXE (Windows) or app (Mac); save states are stored next to it.
 - **Safe by design:** soft fade-in, feedback protection for loopback devices, safe start after a
   crash, plugin scan in a separate process.
 
@@ -166,8 +168,34 @@ the tracker rate.
 
 ## Using the app
 
+### Save states
+
+A save state holds **everything**: the plugin and all its settings, the audio device, input and
+channel routing, head tracking (port, parameters, invert), the headphone correction and every
+switch. The group **SAVE STATE** at the top shows which one is in use – or **No save state** if
+none is loaded. The name is also shown in the window title.
+
+- **Nothing is saved automatically.** Click **Save** to write the current settings into the save
+  state in use. While something is not saved yet, its name shows a **\***; before loading another
+  save state, changing the plugin or quitting, the app asks whether to save.
+- **Choose a save state** from the list to load it (the audio device and plugin are reopened).
+- **More...**: *Save as new*, *Rename*, *Delete*, *Use as default at start*, *Reload* (discard
+  changes), *New with standard settings* and *Open save state folder*.
+- **Default:** one save state is marked **(default)** – it is loaded at every start. The first save
+  state you create becomes the default; change it with *More... → Use as default at start*.
+  Without a default, the app starts with the standard settings.
+- **Choosing another plugin** opens it with its own default settings. To keep a plugin's settings,
+  save them in a save state.
+- **Backups:** every save state is a single file (`<name>.hthstate`) in the folder **Save States**
+  next to the program. Copy these files to back them up or to move them to another computer.
+
+When you start version 2.2 for the first time, your previous settings become the save state
+**Default** (with the plugin that was loaded last and the headphone correction that was chosen).
+
+### Plugin, input and output
+
 **Plugin list.** On the first start the app scans your VST3 folder like a DAW. Plugins inside
-shell files are listed by name, and each plugin keeps its own settings. A plugin that crashes or
+shell files are listed by name. A plugin that crashes or
 hangs during the scan is marked **(skipped by scan)** and can still be loaded by hand. After
 installing new plugins, choose **Rescan plugins** at the end of the list.
 Choose **(none - headphone correction only)** to use the app purely as a headphone EQ.
@@ -180,13 +208,13 @@ channels instead of dropping them.
 **Output.**
 - **Speaker simulation** – off: you hear the input without the plugin (downmixed to stereo), handy
   for A/B comparisons.
-- **Headphone correction** – choose one of five slots; **Edit...** opens the correction window:
+- **Headphone correction** – one per save state; **Edit...** opens the correction window:
   search the AutoEq database (*Find in database...*, recommended measurement per headphone,
   *Show all measurements* for every source) or **import** an *EqualizerAPO ParametricEq* file
   from [autoeq.app](https://autoeq.app). Don't combine it with a correction inside the plugin
   (e.g. Virtuoso's HPC EQ), or your headphones are corrected twice.
 
-**Volume keys control output** (on by default, the same for every plugin). The system volume –
+**Volume keys control output** (on by default). The system volume –
 keys, slider, volume pop-up – changes the virtual device you play into. With this switch on, the
 app passes it on to your headphones, so you no longer have to change the headphones' volume in the
 sound settings. When it is switched on, the virtual device first takes over the headphones' current
@@ -205,7 +233,7 @@ plugin's controls to you.
 
 <a id="flexasio-start-sound-windows"></a>**FlexASIO start sound (Windows, off by default; only for
 the FlexASIO setup).** FlexASIO only starts once its input receives audio, so normally you have to start playback first.
-With this switch on (group *Global (all plugins)*), the app plays a short, very quiet burst of soft
+With this switch on (group *FlexASIO*), the app plays a short, very quiet burst of soft
 noise (about half a second) into the playback side of FlexASIO's input whenever FlexASIO is
 opened – at program start or when you choose it in *Audio settings...*. FlexASIO starts right
 away; nothing else is played. Automatic reconnects play no sound.
@@ -219,8 +247,8 @@ each attempt).
 - The sound fades in softly after every start or device change.
 - If a loopback device is used as input **and** output (also inside FlexASIO's configuration),
   the output stays muted and a warning is shown.
-- If the last start did not complete, the next one starts without the saved device and plugin
-  (*Safe start*) – choose them again, all settings are kept.
+- If the last start did not complete, the next one starts without the audio device and plugin of
+  the default save state (*Safe start*) – choose them again; the save state itself is unchanged.
 
 ## Troubleshooting
 
@@ -234,8 +262,12 @@ each attempt).
 | **Audio device stopped** | Click *Audio settings...* or turn on *Auto-reconnect audio device*. |
 | No sound at all | Check the enabled channels in *Audio settings...*; on the Mac check microphone access. |
 
-**Settings** are stored in `Head Tracking Host.settings` next to the program. If that folder is not
-writable, `%APPDATA%\Head Tracking Host` (Windows) or
+**Files.** Next to the program:
+- **Save States** – one file per save state (see [Save states](#save-states)).
+- `Head Tracking Host.cache` – only the plugin list of the VST3 scan and the safe-start check, no
+  settings. Deleting it is harmless (the plugins are scanned again).
+
+If that folder is not writable, `%APPDATA%\Head Tracking Host` (Windows) or
 `~/Library/Application Support/Head Tracking Host` (Mac) is used instead.
 
 ## Building from source
