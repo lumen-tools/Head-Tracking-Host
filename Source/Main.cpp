@@ -853,6 +853,7 @@ class HostEngine : public AudioIODeviceCallback
 public:
     void setPlugin (AudioPluginInstance* p) { plugin = p; }
     void setMuted (bool m) { muted = m; }
+    void setInputMuted (bool m) { inputMuted = m; } // feedback protection: silence instead of the input
     static constexpr int maxChannels = 32;
     // Which device input channel feeds each plugin input channel (-1 = silent).
     // Speaker simulation off (or no plugin): the routed input is downmixed to stereo ("dry").
@@ -962,6 +963,9 @@ public:
             const int fold = ch < maxChannels ? foldMap[(size_t) ch].load() : -1;
             if (isPositiveAndBelow (fold, numInputs) && ch < pluginIns && inputs[fold] != nullptr)
                 FloatVectorOperations::addWithMultiply (block.getWritePointer (ch), inputs[fold], 0.7071f, numSamples);
+
+            if (inputMuted)
+                block.clear (ch, 0, numSamples);
         }
 
         // Undo the virtual device's own volume (see setVolumeGains).
@@ -1082,7 +1086,7 @@ private:
     }
 
     AudioPluginInstance* plugin = nullptr;
-    std::atomic<bool> muted { false }, speakerSimulation { true }, deviceError { false };
+    std::atomic<bool> muted { false }, inputMuted { false }, speakerSimulation { true }, deviceError { false };
     std::atomic<int> dryChannels { 8 };
     std::array<std::atomic<float>, 12> inputPeaks {};
     HeadphoneEq headphoneEq;
@@ -2543,6 +2547,44 @@ private:
         feedbackRisk = sameLoopback (input, output);
         engine.setMuted (feedbackRisk);
         updateVolumeDevices();
+        checkInputMute();
+    }
+
+    // Feedback protection (like JUCE standalone plugins): with other audio devices than the save
+    // state's (standard settings, a device that is missing, or another device chosen), the input
+    // is muted - e.g. a microphone with speakers would feed back. Only a change of the devices
+    // decides; unmuting by hand holds until the devices change again.
+    static String deviceKey (const String& type, const String& in, const String& out)
+    {
+        return type + "|" + in + "|" + out;
+    }
+
+    void checkInputMute()
+    {
+        if (deviceManager.getCurrentAudioDevice() == nullptr)
+            return;
+        const auto setup = deviceManager.getAudioDeviceSetup();
+        const auto key = deviceKey (deviceManager.getCurrentAudioDeviceType(), setup.inputDeviceName, setup.outputDeviceName);
+        if (key == lastDeviceKey)
+            return;
+        lastDeviceKey = key;
+
+        String saved;
+        if (std::unique_ptr<XmlElement> xml (settings->getXmlValue ("audioDevice")); xml != nullptr && ! safeMode)
+            saved = deviceKey (xml->getStringAttribute ("deviceType"), xml->getStringAttribute ("audioInputDeviceName"),
+                               xml->getStringAttribute ("audioOutputDeviceName"));
+        setInputMuted (key != saved);
+    }
+
+    void setInputMuted (bool m)
+    {
+        inputMuted = m;
+        engine.setInputMuted (m);
+        audioButton.setButtonText (m ? "Audio settings (muted)" : "Audio settings...");
+        if (m) audioButton.setColour (TextButton::buttonColourId, Colour (0xff7a2a26));
+        else   audioButton.removeColour (TextButton::buttonColourId);
+        if (onInputMuteChanged)
+            onInputMuteChanged();
     }
 
     //==============================================================================
@@ -2907,6 +2949,11 @@ private:
         {
             c = red; status = "Output muted: input and output are the same loopback device";
             detail = "In \"Audio settings...\" choose your headphones or interface as output.";
+        }
+        else if (inputMuted)
+        {
+            c = red; status = "Input muted (feedback protection)";
+            detail = "The audio devices differ from the save state. Check them in \"Audio settings\" and untick \"Mute audio input\".";
         }
         else if (plugin == nullptr && lastError.isNotEmpty())
         {
@@ -3581,10 +3628,10 @@ private:
     void showAudioSettings()
     {
         audioSettingsOpened = true;
-        auto* selector = new AudioDeviceSelectorComponent (deviceManager, 0, 16, 2, 16, false, false, true, false);
-        selector->setSize (540, 480);
+        auto* content = new AudioSettingsContent (*this);
+        content->setSize (540, 520);
         DialogWindow::LaunchOptions o;
-        o.content.setOwned (selector);
+        o.content.setOwned (content);
         o.dialogTitle = "Audio settings";
         o.dialogBackgroundColour = panel;
         o.escapeKeyTriggersCloseButton = true;
@@ -3592,6 +3639,44 @@ private:
         o.resizable = true;
         dialogs.add (o.launchAsync());
     }
+
+    // Audio settings: "Feedback loop: Mute audio input" above JUCE's device selector.
+    struct AudioSettingsContent : public Component
+    {
+        explicit AudioSettingsContent (MainComponent& o)
+            : owner (o), selector (o.deviceManager, 0, 16, 2, 16, false, false, true, false)
+        {
+            addAndMakeVisible (label);
+            label.setText ("Feedback loop:", dontSendNotification);
+            label.setJustificationType (Justification::centredRight);
+            addAndMakeVisible (muteButton);
+            muteButton.setTooltip ("Muted automatically when the audio devices differ from the save state "
+                                   "(e.g. microphone and speakers would feed back).");
+            muteButton.onClick = [this] { owner.setInputMuted (muteButton.getToggleState()); };
+            addAndMakeVisible (selector);
+            owner.onInputMuteChanged = [this] { refresh(); };
+            refresh();
+        }
+
+        ~AudioSettingsContent() override { owner.onInputMuteChanged = nullptr; }
+
+        void refresh() { muteButton.setToggleState (owner.inputMuted, dontSendNotification); }
+
+        void resized() override
+        {
+            auto r = getLocalBounds();
+            auto top = r.removeFromTop (40).reduced (0, 8);
+            // Line up with the selector's labels (they take about 35 % of the width).
+            label.setBounds (top.removeFromLeft (proportionOfWidth (0.35f)));
+            muteButton.setBounds (top.withTrimmedLeft (10));
+            selector.setBounds (r);
+        }
+
+        MainComponent& owner;
+        Label label;
+        ToggleButton muteButton { "Mute audio input" };
+        AudioDeviceSelectorComponent selector;
+    };
 
     //==============================================================================
     struct Dot : public Component
@@ -3649,7 +3734,9 @@ private:
     std::array<AxisParam, 3> params;
     String activeLayout, lastError, lastAddress;
     bool feedbackRisk = false, microphoneDenied = false, audioInitialised = false;
-    bool safeMode = false, startupCleared = false, audioSettingsOpened = false;
+    bool safeMode = false, startupCleared = false, audioSettingsOpened = false, inputMuted = false;
+    String lastDeviceKey;                     // devices the feedback protection last looked at
+    std::function<void()> onInputMuteChanged; // the open audio settings window, if any
     bool streamWasRunning = false, recovering = false;
     int restartAttempts = 0;
     uint32 lastCallbackCount = 0, lastCallbackTime = 0, lastRestartAttempt = 0, audioStartTime = 0, lastReconnectShown = 0;

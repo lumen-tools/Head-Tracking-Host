@@ -248,6 +248,11 @@ the app tries to reopen your saved device every few seconds instead (it may paus
 each attempt).
 
 **Protection.**
+- **Feedback loop: Mute audio input** (top of **Audio settings**). With standard settings, or when
+  the audio devices differ from the save state (a saved device is missing, or you chose another
+  one), the input is muted – e.g. microphone and speakers would feed back. The status line turns
+  red (*Input muted*) and the button reads **Audio settings (muted)**. Check the devices, then
+  untick **Mute audio input**; save the save state so it opens unmuted next time.
 - The sound fades in softly after every start or device change.
 - If a loopback device is used as input **and** output (also inside FlexASIO's configuration),
   the output stays muted and a warning is shown.
