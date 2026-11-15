@@ -40,6 +40,9 @@ const Colour red   (0xffd64545);
 const Colour grey  (0xff8a8a8a);
 const Colour panel (0xff262626);
 
+// Channel routing that puts side before back (Windows sends 7.1 as L R C LFE back back side side).
+const char* const swapSideRear = "0,1,2,3,6,7,4,5";
+
 struct InputLayout
 {
     const char* name;
@@ -1254,7 +1257,7 @@ public:
         sidebar.addAndMakeVisible (trackingButton);
         trackingButton.getProperties().set ("switch", true);
         trackingButton.setTooltip ("Off: stops listening for head tracking, frees the port and sets Yaw/Pitch/Roll to 0 degrees.");
-        trackingButton.setToggleState (settings->getBoolValue ("headTracking", true), dontSendNotification);
+        trackingButton.setToggleState (settings->getBoolValue ("headTracking", false), dontSendNotification);
         trackingButton.onClick = [this] { setHeadTracking (trackingButton.getToggleState()); };
 
         // Row 3: which plugin parameter is yaw / pitch / roll
@@ -1334,7 +1337,7 @@ public:
 
         sidebar.addAndMakeVisible (indicatorButton);
         indicatorButton.getProperties().set ("switch", true);
-        indicatorButton.setToggleState (settings->getBoolValue ("headIndicator", true), dontSendNotification);
+        indicatorButton.setToggleState (settings->getBoolValue ("headIndicator", false), dontSendNotification);
         indicatorButton.onClick = [this]
         {
             settings->setValue ("headIndicator", indicatorButton.getToggleState());
@@ -2972,7 +2975,13 @@ private:
         inputMap.clear();
         auto tokens = StringArray::fromTokens (settings->getValue ("inputMap"), ",", {});
         if (tokens.isEmpty() && settings->getBoolValue ("swapSurrounds", false))
-            tokens = StringArray::fromTokens ("0,1,2,3,6,7,4,5", ",", {}); // from the old swap option
+            tokens = StringArray::fromTokens (swapSideRear, ",", {}); // from the old swap option
+       #if JUCE_WINDOWS
+        // Standard settings on Windows: it sends 7.1 as L R C LFE back back side side, most plugins
+        // want side before back. A stored routing (also 1:1, stored as "") is kept as it is.
+        if (! settings->containsKey ("inputMap") && ! settings->containsKey ("swapSurrounds"))
+            tokens = StringArray::fromTokens (swapSideRear, ",", {});
+       #endif
         for (auto& t : tokens)
             inputMap.push_back (t.trim().getIntValue());
         applyInputMap();
@@ -3006,7 +3015,9 @@ private:
         for (int ch = 0; ch < HostEngine::maxChannels; ++ch)
             engine.setInputSource (ch, sourceFor (ch));
 
-        channelsButton.setButtonText (inputMap.empty() ? "Channels: 1:1" : "Channels: custom");
+        channelsButton.setButtonText (inputMap.empty() ? "Channels: 1:1"
+                                      : tokens.joinIntoString (",") == swapSideRear ? "Channels: side/rear swapped"
+                                                                                   : "Channels: custom");
         applyFold();
     }
 
@@ -3127,6 +3138,13 @@ private:
     void applyAutoEq()
     {
         const auto profile = eqProfile();
+        // Without a profile there is nothing to switch on: the switch is off and greyed out.
+        autoEqButton.setEnabled (! profile.isEmpty());
+        if (profile.isEmpty() && autoEqButton.getToggleState())
+        {
+            autoEqButton.setToggleState (false, dontSendNotification);
+            settings->setValue ("autoeqEnabled", false);
+        }
         engine.getHeadphoneEq().setProfile (profile, autoEqButton.getToggleState());
         autoEqNameLabel.setText (profile.isEmpty() ? String ("(none chosen)") : eqName(), dontSendNotification);
         autoEqNameLabel.setColour (Label::textColourId, profile.isEmpty() ? ui::secondary : ui::label);
@@ -3715,16 +3733,16 @@ public:
             LookAndFeel_V4::drawToggleButton (g, b, highlighted, down);
             return;
         }
-        const bool on = b.getToggleState();
+        const bool on = b.getToggleState(), enabled = b.isEnabled();
         auto bounds = b.getLocalBounds().toFloat();
         auto track = bounds.removeFromLeft (38.0f).withSizeKeepingCentre (38.0f, 20.0f);
-        g.setColour (on ? ui::green : Colour (0xff48484a));
+        g.setColour ((on ? ui::green : Colour (0xff48484a)).withMultipliedAlpha (enabled ? 1.0f : 0.45f));
         g.fillRoundedRectangle (track, 10.0f);
         const float knob = 16.0f;
         const float x = on ? track.getRight() - knob - 2.0f : track.getX() + 2.0f;
-        g.setColour (Colours::white.withAlpha (highlighted ? 1.0f : 0.92f));
+        g.setColour (Colours::white.withAlpha (! enabled ? 0.35f : highlighted ? 1.0f : 0.92f));
         g.fillEllipse (x, track.getCentreY() - knob * 0.5f, knob, knob);
-        g.setColour (b.findColour (ToggleButton::textColourId));
+        g.setColour (b.findColour (ToggleButton::textColourId).withMultipliedAlpha (enabled ? 1.0f : 0.5f));
         g.setFont (FontOptions (14.0f));
         g.drawText (b.getButtonText(), bounds.withTrimmedLeft (8.0f), Justification::centredLeft);
     }

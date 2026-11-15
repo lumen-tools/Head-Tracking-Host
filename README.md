@@ -86,8 +86,9 @@ The app is not commercially code-signed, so the system warns once:
    - Active input channels: all four pairs, **IN 0 + 1** to **IN 6 + 7**
    - Buffer size e.g. 256
 3. Set **Input** to **7.1 (8 channels)**.
-4. Click **Channels** → **Swap side/rear (Windows)** – Windows delivers the side and rear
-   surrounds in swapped order.
+4. Check that **Channels** shows *side/rear swapped* – Windows delivers the side and rear
+   surrounds in swapped order. This is the default on Windows; otherwise click **Channels** →
+   **Swap side/rear (Windows)**.
 
 HTH Direct records what is played into *Hi-Fi Cable Input* and plays the result on your
 headphones. The two devices run on their own clocks, which drift apart slowly; HTH Direct keeps
@@ -110,7 +111,8 @@ Then continue with [Head tracking](#head-tracking).
 **3. Head Tracking Host**
 1. **Audio settings...**: type **ASIO**, device **FlexASIO**, sample rate as your headphones,
    buffer size e.g. 256. Enable the inputs **IN 0 – IN 7**.
-2. Set **Input** to **7.1 (8 channels)** and click **Channels** → **Swap side/rear (Windows)**.
+2. Set **Input** to **7.1 (8 channels)** and check that **Channels** shows *side/rear swapped*
+   (the default on Windows; otherwise **Channels** → **Swap side/rear (Windows)**).
 3. Optional: turn on **FlexASIO start sound** (see [below](#flexasio-start-sound-windows)), so you
    don't have to start playback before opening the app.
 
@@ -155,7 +157,8 @@ click every few minutes. HTH Direct avoids this.
    profile **IEM Scene Rotator YPR** (port 9000), tracking rate 25 Hz or higher.
 2. Close other programs that listen on the same port (e.g. a plugin's standalone app with its
    own OSC head tracking).
-3. In Head Tracking Host turn on **Head tracking** and keep **OSC port** at 9000.
+3. In Head Tracking Host turn on **Head tracking** (off by default) and keep **OSC port** at 9000.
+   **Head indicator** (also off by default) shows the received angles.
 4. For **Yaw**, **Pitch** and **Roll** choose the matching plugin parameters
    (APL Virtuoso: *HT Yaw*, *HT Pitch*, *HT Roll*). If the plugin only has one rotation control,
    use it for Yaw and leave Pitch and Roll at **- none -**.
@@ -212,7 +215,8 @@ channels instead of dropping them.
   search the AutoEq database (*Find in database...*, recommended measurement per headphone,
   *Show all measurements* for every source) or **import** an *EqualizerAPO ParametricEq* file
   from [autoeq.app](https://autoeq.app). Don't combine it with a correction inside the plugin
-  (e.g. Virtuoso's HPC EQ), or your headphones are corrected twice.
+  (e.g. Virtuoso's HPC EQ), or your headphones are corrected twice. The switch can only be turned
+  on once a correction is chosen.
 
 **Volume keys control output** (on by default). The system volume –
 keys, slider, volume pop-up – changes the virtual device you play into. With this switch on, the
